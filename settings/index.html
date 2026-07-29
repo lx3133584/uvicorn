@@ -699,6 +699,33 @@
   
   
     <li class="md-nav__item">
+      <a href="../concepts/http-protocols/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  HTTP Protocols
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
       <a href="../concepts/websockets/" class="md-nav__link">
         
   
@@ -1242,7 +1269,7 @@ See <a href="https://watchfiles.helpmanual.io/api/watch/">watchfiles documentati
 <h2 id="implementation">Implementation<a class="headerlink" href="#implementation" title="Permanent link">&para;</a></h2>
 <ul>
 <li><code>--loop &lt;str&gt;</code> - Set the event loop implementation. The uvloop implementation provides greater performance, but is not compatible with Windows or PyPy. <strong>Options:</strong> <em>'auto', 'asyncio', 'uvloop'.</em> <strong>Default:</strong> <em>'auto'</em>.</li>
-<li><code>--http &lt;str&gt;</code> - Set the HTTP protocol implementation. The httptools implementation provides greater performance, but it not compatible with PyPy. <strong>Options:</strong> <em>'auto', 'h11', 'httptools'.</em> <strong>Default:</strong> <em>'auto'</em>.</li>
+<li><code>--http &lt;str&gt;</code> - Set the <a href="../concepts/http-protocols/">HTTP protocol implementation</a>. The httptools implementation provides greater performance, but is not compatible with PyPy. <strong>Options:</strong> <em>'auto', 'h11', 'httptools', 'zttp'.</em> <strong>Default:</strong> <em>'auto'</em>.</li>
 <li><code>--ws &lt;str&gt;</code> - Set the WebSockets protocol implementation. Either of the <code>websockets</code> and <code>wsproto</code> packages are supported. There are two versions of <code>websockets</code> supported: <code>websockets</code> and <code>websockets-sansio</code>. Use <code>'none'</code> to ignore all websocket requests. <strong>Options:</strong> <em>'auto', 'none', 'websockets', 'websockets-sansio', 'wsproto'.</em> <strong>Default:</strong> <em>'auto'</em>.</li>
 <li><code>--ws-max-size &lt;int&gt;</code> - Set the WebSockets max message size, in bytes. <strong>Default:</strong> <em>16777216</em> (16 MB).</li>
 <li><code>--ws-max-queue &lt;int&gt;</code> - Set the maximum length of the WebSocket incoming message queue. Only available with the <code>websockets</code> protocol. <strong>Default:</strong> <em>32</em>.</li>
@@ -1291,10 +1318,10 @@ to <a href="https://github.com/abersheeran/a2wsgi">a2wsgi</a> (<code>pip install
 <p>For advanced TLS scenarios that the flags above don't cover (e.g., mutual TLS, certificate pinning, custom <code>SSLContext.options</code>), pass an <code>ssl_context_factory</code> to <code>uvicorn.run()</code> or <code>Config</code>. See <a href="../deployment/#customizing-the-ssl-context">Running with HTTPS</a> for details.</p>
 <h2 id="resource-limits">Resource Limits<a class="headerlink" href="#resource-limits" title="Permanent link">&para;</a></h2>
 <ul>
-<li><code>--limit-concurrency &lt;int&gt;</code> - Maximum number of concurrent connections or tasks to allow, before issuing HTTP 503 responses. Useful for ensuring known memory usage patterns even under over-resourced loads.</li>
+<li><code>--limit-concurrency &lt;int&gt;</code> - Maximum number of concurrent connections or tasks to allow, before issuing HTTP 503 responses. Useful for ensuring known memory usage patterns even under over-resourced loads. This is an application-level limit: excess requests receive an immediate 503, they are <strong>not</strong> queued. See <a href="../server-behavior/#concurrency-and-backlog">Concurrency and backlog</a> for details and how it differs from <code>--backlog</code>.</li>
 <li><code>--limit-max-requests &lt;int&gt;</code> - Maximum number of requests to service before terminating the process. Useful when running together with a process manager, for preventing memory leaks from impacting long-running processes.</li>
 <li><code>--limit-max-requests-jitter &lt;int&gt;</code> - Maximum jitter to add to <code>limit-max-requests</code>. Each worker adds a random number in the range <code>[0, jitter]</code>, staggering restarts to avoid all workers restarting simultaneously. <strong>Default:</strong> <em>0</em>.</li>
-<li><code>--backlog &lt;int&gt;</code> - Maximum number of connections to hold in backlog. Relevant for heavy incoming traffic. <strong>Default:</strong> <em>2048</em>.</li>
+<li><code>--backlog &lt;int&gt;</code> - Maximum number of connections to hold in the TCP accept queue, passed to the socket's <code>listen()</code> call. This is an OS-level setting, independent of <code>--limit-concurrency</code>; see <a href="../server-behavior/#concurrency-and-backlog">Concurrency and backlog</a>. Relevant for heavy incoming traffic. <strong>Default:</strong> <em>2048</em>.</li>
 </ul>
 <h2 id="timeouts">Timeouts<a class="headerlink" href="#timeouts" title="Permanent link">&para;</a></h2>
 <ul>

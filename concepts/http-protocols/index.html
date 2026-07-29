@@ -10,34 +10,36 @@
       
       
       
-        <link rel="canonical" href="https://uvicorn.dev/">
+        <link rel="canonical" href="https://uvicorn.dev/concepts/http-protocols/">
       
       
+        <link rel="prev" href="../logging/">
       
-        <link rel="next" href="./installation/">
+      
+        <link rel="next" href="../websockets/">
       
       
         
       
       
-      <link rel="icon" href="./uvicorn.png">
+      <link rel="icon" href="../../uvicorn.png">
       <meta name="generator" content="zensical-0.0.43">
     
     
       
-        <title>Index - Uvicorn</title>
+        <title>HTTP Protocols - Uvicorn</title>
       
     
     
       
         
       
-      <link rel="stylesheet" href="./assets/stylesheets/modern/main.fba56155.min.css">
+      <link rel="stylesheet" href="../../assets/stylesheets/modern/main.fba56155.min.css">
       
         
           
         
-        <link rel="stylesheet" href="./assets/stylesheets/modern/palette.dfe2e883.min.css">
+        <link rel="stylesheet" href="../../assets/stylesheets/modern/palette.dfe2e883.min.css">
       
       
 
@@ -56,9 +58,9 @@
       
     
     
-      <link rel="stylesheet" href="./css/extra.css">
+      <link rel="stylesheet" href="../../css/extra.css">
     
-    <script>__md_scope=new URL(".",location),__md_scope.pathname.endsWith("/")||(__md_scope=new URL(__md_scope.pathname+"/",location)),__md_hash=e=>[...e].reduce(((e,t)=>(e<<5)-e+t.charCodeAt(0)),0),__md_get=(e,t=localStorage,_=__md_scope)=>JSON.parse(t.getItem(_.pathname+"."+e)),__md_set=(e,t,_=localStorage,a=__md_scope)=>{try{_.setItem(a.pathname+"."+e,JSON.stringify(t))}catch(e){}},document.documentElement.setAttribute("data-platform",navigator.platform)</script>
+    <script>__md_scope=new URL("../..",location),__md_scope.pathname.endsWith("/")||(__md_scope=new URL(__md_scope.pathname+"/",location)),__md_hash=e=>[...e].reduce(((e,t)=>(e<<5)-e+t.charCodeAt(0)),0),__md_get=(e,t=localStorage,_=__md_scope)=>JSON.parse(t.getItem(_.pathname+"."+e)),__md_set=(e,t,_=localStorage,a=__md_scope)=>{try{_.setItem(a.pathname+"."+e,JSON.stringify(t))}catch(e){}},document.documentElement.setAttribute("data-platform",navigator.platform)</script>
     
       
   
@@ -102,7 +104,7 @@
     <div data-md-component="skip">
       
         
-        <a href="#sponsorship" class="md-skip">
+        <a href="#http-protocols" class="md-skip">
           Skip to content
         </a>
       
@@ -118,9 +120,9 @@
 
 <header class="md-header md-header--shadow" data-md-component="header">
   <nav class="md-header__inner md-grid" aria-label="Header">
-    <a href="" title="Uvicorn" class="md-header__button md-logo" aria-label="Uvicorn" data-md-component="logo">
+    <a href="../.." title="Uvicorn" class="md-header__button md-logo" aria-label="Uvicorn" data-md-component="logo">
       
-  <img src="./uvicorn.png" alt="Uvicorn">
+  <img src="../../uvicorn.png" alt="Uvicorn">
 
     </a>
     <label class="md-header__button md-icon" for="__drawer" aria-label="Navigation">
@@ -137,7 +139,7 @@
         <div class="md-header__topic" data-md-component="header-topic">
           <span class="md-ellipsis">
             
-              Index
+              HTTP Protocols
             
           </span>
         </div>
@@ -226,9 +228,9 @@
 
 <nav class="md-nav md-nav--primary" aria-label="Navigation" data-md-level="0">
   <label class="md-nav__title" for="__drawer">
-    <a href="" title="Uvicorn" class="md-nav__button md-logo" aria-label="Uvicorn" data-md-component="logo">
+    <a href="../.." title="Uvicorn" class="md-nav__button md-logo" aria-label="Uvicorn" data-md-component="logo">
       
-  <img src="./uvicorn.png" alt="Uvicorn">
+  <img src="../../uvicorn.png" alt="Uvicorn">
 
     </a>
     Uvicorn
@@ -252,34 +254,10 @@
       
   
   
-    
   
   
-  
-    <li class="md-nav__item md-nav__item--active">
-      
-      
-      
-      
-      
-        <label class="md-nav__link md-nav__link--active" for="__toc">
-          
-  
-  
-  <span class="md-ellipsis">
-    
-  
-  Welcome
-
-    
-  </span>
-  
-  
-
-          <span class="md-nav__icon md-icon"></span>
-        </label>
-      
-      <a href="" class="md-nav__link md-nav__link--active">
+    <li class="md-nav__item">
+      <a href="../.." class="md-nav__link">
         
   
   
@@ -294,136 +272,6 @@
   
 
       </a>
-      
-        
-
-
-<nav class="md-nav md-nav--secondary" aria-label="On this page">
-  
-  
-  
-  
-    <label class="md-nav__title" for="__toc">
-      <span class="md-nav__icon md-icon"></span>
-      On this page
-    </label>
-    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
-      
-        <li class="md-nav__item">
-  <a href="#sponsorship" class="md-nav__link">
-    <span class="md-ellipsis">
-      <span class="md-typeset">
-        Sponsorship
-      </span>
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#quickstart" class="md-nav__link">
-    <span class="md-ellipsis">
-      <span class="md-typeset">
-        Quickstart
-      </span>
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#usage" class="md-nav__link">
-    <span class="md-ellipsis">
-      <span class="md-typeset">
-        Usage
-      </span>
-    </span>
-  </a>
-  
-    <nav class="md-nav" aria-label="Usage">
-      <ul class="md-nav__list">
-        
-          <li class="md-nav__item">
-  <a href="#command-line-options" class="md-nav__link">
-    <span class="md-ellipsis">
-      <span class="md-typeset">
-        Command line options
-      </span>
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#running-programmatically" class="md-nav__link">
-    <span class="md-ellipsis">
-      <span class="md-typeset">
-        Running programmatically
-      </span>
-    </span>
-  </a>
-  
-    <nav class="md-nav" aria-label="Running programmatically">
-      <ul class="md-nav__list">
-        
-          <li class="md-nav__item">
-  <a href="#uvicornrun" class="md-nav__link">
-    <span class="md-ellipsis">
-      <span class="md-typeset">
-        <code>uvicorn.run</code>
-      </span>
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#config-and-server-instances" class="md-nav__link">
-    <span class="md-ellipsis">
-      <span class="md-typeset">
-        <code>Config</code> and <code>Server</code> instances
-      </span>
-    </span>
-  </a>
-  
-</li>
-        
-      </ul>
-    </nav>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#running-with-gunicorn" class="md-nav__link">
-    <span class="md-ellipsis">
-      <span class="md-typeset">
-        Running with Gunicorn
-      </span>
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#application-factories" class="md-nav__link">
-    <span class="md-ellipsis">
-      <span class="md-typeset">
-        Application factories
-      </span>
-    </span>
-  </a>
-  
-</li>
-        
-      </ul>
-    </nav>
-  
-</li>
-      
-    </ul>
-  
-</nav>
-      
     </li>
   
 
@@ -435,7 +283,7 @@
   
   
     <li class="md-nav__item">
-      <a href="./installation/" class="md-nav__link">
+      <a href="../../installation/" class="md-nav__link">
         
   
   
@@ -461,7 +309,7 @@
   
   
     <li class="md-nav__item">
-      <a href="./settings/" class="md-nav__link">
+      <a href="../../settings/" class="md-nav__link">
         
   
   
@@ -487,7 +335,7 @@
   
   
     <li class="md-nav__item">
-      <a href="./server-behavior/" class="md-nav__link">
+      <a href="../../server-behavior/" class="md-nav__link">
         
   
   
@@ -510,8 +358,10 @@
       
   
   
+    
   
   
+  
     
     
     
@@ -522,11 +372,11 @@
       
     
     
-    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+    <li class="md-nav__item md-nav__item--active md-nav__item--section md-nav__item--nested">
       
         
         
-        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_5" >
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_5" checked>
         
           
           <label class="md-nav__link" for="__nav_5" id="__nav_5_label" tabindex="">
@@ -546,7 +396,7 @@
             <span class="md-nav__icon md-icon"></span>
           </label>
         
-        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_5_label" aria-expanded="false">
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_5_label" aria-expanded="true">
           <label class="md-nav__title" for="__nav_5">
             <span class="md-nav__icon md-icon"></span>
             
@@ -563,7 +413,7 @@
   
   
     <li class="md-nav__item">
-      <a href="./concepts/asgi/" class="md-nav__link">
+      <a href="../asgi/" class="md-nav__link">
         
   
   
@@ -590,7 +440,7 @@
   
   
     <li class="md-nav__item">
-      <a href="./concepts/lifespan/" class="md-nav__link">
+      <a href="../lifespan/" class="md-nav__link">
         
   
   
@@ -617,7 +467,7 @@
   
   
     <li class="md-nav__item">
-      <a href="./concepts/logging/" class="md-nav__link">
+      <a href="../logging/" class="md-nav__link">
         
   
   
@@ -641,10 +491,36 @@
                 
   
   
+    
   
   
-    <li class="md-nav__item">
-      <a href="./concepts/http-protocols/" class="md-nav__link">
+  
+    <li class="md-nav__item md-nav__item--active">
+      
+      
+      
+      
+        
+      
+      
+        <label class="md-nav__link md-nav__link--active" for="__toc">
+          
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  HTTP Protocols
+
+    
+  </span>
+  
+  
+
+          <span class="md-nav__icon md-icon"></span>
+        </label>
+      
+      <a href="././" class="md-nav__link md-nav__link--active">
         
   
   
@@ -659,6 +535,60 @@
   
 
       </a>
+      
+        
+
+
+<nav class="md-nav md-nav--secondary" aria-label="On this page">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      On this page
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#h11" class="md-nav__link">
+    <span class="md-ellipsis">
+      <span class="md-typeset">
+        h11
+      </span>
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#httptools" class="md-nav__link">
+    <span class="md-ellipsis">
+      <span class="md-typeset">
+        httptools
+      </span>
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#zttp" class="md-nav__link">
+    <span class="md-ellipsis">
+      <span class="md-typeset">
+        zttp
+      </span>
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+      
     </li>
   
 
@@ -671,7 +601,7 @@
   
   
     <li class="md-nav__item">
-      <a href="./concepts/websockets/" class="md-nav__link">
+      <a href="../websockets/" class="md-nav__link">
         
   
   
@@ -698,7 +628,7 @@
   
   
     <li class="md-nav__item">
-      <a href="./concepts/event-loop/" class="md-nav__link">
+      <a href="../event-loop/" class="md-nav__link">
         
   
   
@@ -782,7 +712,7 @@
   
   
     <li class="md-nav__item">
-      <a href="./deployment/" class="md-nav__link">
+      <a href="../../deployment/" class="md-nav__link">
         
   
   
@@ -809,7 +739,7 @@
   
   
     <li class="md-nav__item">
-      <a href="./deployment/docker/" class="md-nav__link">
+      <a href="../../deployment/docker/" class="md-nav__link">
         
   
   
@@ -843,7 +773,7 @@
   
   
     <li class="md-nav__item">
-      <a href="./release-notes/" class="md-nav__link">
+      <a href="../../release-notes/" class="md-nav__link">
         
   
   
@@ -869,7 +799,7 @@
   
   
     <li class="md-nav__item">
-      <a href="./contributing/" class="md-nav__link">
+      <a href="../../contributing/" class="md-nav__link">
         
   
   
@@ -892,7 +822,7 @@
   <div class="md-nav__sponsors">
     <p class="md-nav__sponsors-title">Sponsors</p>
     <a href="https://fastapi.tiangolo.com" title="FastAPI" class="md-nav__sponsor">
-      <img src="./img/fastapi-logo.png" alt="FastAPI">
+      <img src="../../img/fastapi-logo.png" alt="FastAPI">
     </a>
     <a href="https://github.com/sponsors/Kludex" class="md-nav__sponsor-cta">
       Become a sponsor! ❤️
@@ -911,6 +841,8 @@
                     
                     
                     
+                      
+                    
                     
                       <input class="md-nav__toggle md-toggle" type="checkbox" id="__toc">
                       <div class="md-sidebar-button__wrapper">
@@ -926,6 +858,8 @@
   
   
   
+    
+  
   
     <label class="md-nav__title" for="__toc">
       <span class="md-nav__icon md-icon"></span>
@@ -934,10 +868,10 @@
     <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
       
         <li class="md-nav__item">
-  <a href="#sponsorship" class="md-nav__link">
+  <a href="#h11" class="md-nav__link">
     <span class="md-ellipsis">
       <span class="md-typeset">
-        Sponsorship
+        h11
       </span>
     </span>
   </a>
@@ -945,10 +879,10 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#quickstart" class="md-nav__link">
+  <a href="#httptools" class="md-nav__link">
     <span class="md-ellipsis">
       <span class="md-typeset">
-        Quickstart
+        httptools
       </span>
     </span>
   </a>
@@ -956,91 +890,13 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#usage" class="md-nav__link">
+  <a href="#zttp" class="md-nav__link">
     <span class="md-ellipsis">
       <span class="md-typeset">
-        Usage
+        zttp
       </span>
     </span>
   </a>
-  
-    <nav class="md-nav" aria-label="Usage">
-      <ul class="md-nav__list">
-        
-          <li class="md-nav__item">
-  <a href="#command-line-options" class="md-nav__link">
-    <span class="md-ellipsis">
-      <span class="md-typeset">
-        Command line options
-      </span>
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#running-programmatically" class="md-nav__link">
-    <span class="md-ellipsis">
-      <span class="md-typeset">
-        Running programmatically
-      </span>
-    </span>
-  </a>
-  
-    <nav class="md-nav" aria-label="Running programmatically">
-      <ul class="md-nav__list">
-        
-          <li class="md-nav__item">
-  <a href="#uvicornrun" class="md-nav__link">
-    <span class="md-ellipsis">
-      <span class="md-typeset">
-        <code>uvicorn.run</code>
-      </span>
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#config-and-server-instances" class="md-nav__link">
-    <span class="md-ellipsis">
-      <span class="md-typeset">
-        <code>Config</code> and <code>Server</code> instances
-      </span>
-    </span>
-  </a>
-  
-</li>
-        
-      </ul>
-    </nav>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#running-with-gunicorn" class="md-nav__link">
-    <span class="md-ellipsis">
-      <span class="md-typeset">
-        Running with Gunicorn
-      </span>
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#application-factories" class="md-nav__link">
-    <span class="md-ellipsis">
-      <span class="md-typeset">
-        Application factories
-      </span>
-    </span>
-  </a>
-  
-</li>
-        
-      </ul>
-    </nav>
   
 </li>
       
@@ -1062,6 +918,51 @@
   
 
 
+  <nav class="md-path" aria-label="Navigation" >
+    <ol class="md-path__list">
+      
+        
+  
+  
+    <li class="md-path__item">
+      <a href="../.." class="md-path__link">
+        
+  
+  <span class="md-ellipsis">
+    Welcome
+  </span>
+
+      </a>
+    </li>
+  
+
+      
+      
+        
+  
+  
+    
+    
+    
+    
+    
+      <li class="md-path__item">
+        <a href="../asgi/" class="md-path__link">
+          
+  
+  <span class="md-ellipsis">
+    Concepts
+  </span>
+
+        </a>
+      </li>
+    
+  
+
+      
+    </ol>
+  </nav>
+
               
               <article class="md-content__inner md-typeset">
                 
@@ -1070,164 +971,41 @@
   
 
 
-  <h1 id="__skip">Index</h1>
-
-<style>
-  .md-typeset h1,
-  .md-content__button {
-    display: none;
-  }
-</style>
-
-<p align="center">
-  <img width="320" height="320" src="../../uvicorn.png" alt='uvicorn'>
-</p>
-
-<p align="center">
-<em>An ASGI web server, for Python.</em>
-</p>
-
-<p align="center">
-<a href="https://github.com/Kludex/uvicorn/actions">
-    <img src="https://github.com/Kludex/uvicorn/workflows/Test%20Suite/badge.svg" alt="Test Suite">
-</a>
-<a href="https://pypi.org/project/uvicorn/">
-    <img src="https://badge.fury.io/py/uvicorn.svg" alt="Package version">
-</a>
-<a href="https://pypi.org/project/uvicorn" target="_blank">
-    <img src="https://img.shields.io/pypi/pyversions/uvicorn.svg?color=%2334D058" alt="Supported Python versions">
-</a>
-<a href="https://discord.gg/RxKUF5JuHs">
-    <img src="https://img.shields.io/discord/1051468649518616576?logo=discord&logoColor=ffffff&color=7389D8&labelColor=6A7EC2" alt="Discord">
-</a>
-</p>
-
-<hr />
-<p><strong>Documentation</strong>: <a href="https://uvicorn.dev">https://uvicorn.dev</a></p>
-<p><strong>Source Code</strong>: <a href="https://www.github.com/Kludex/uvicorn">https://www.github.com/Kludex/uvicorn</a></p>
-<hr />
-<p><strong>Uvicorn</strong> is an <a href="concepts/asgi/">ASGI</a> web server implementation for Python.</p>
-<p>Until recently Python has lacked a minimal low-level server/application interface for
-async frameworks. The <a href="https://asgi.readthedocs.io/en/latest/">ASGI specification</a> fills this gap,
-and means we're now able to start building a common set of tooling usable across all async frameworks.</p>
-<p>Uvicorn currently supports <strong>HTTP/1.1</strong> and <strong>WebSockets</strong>.</p>
-<h2 id="sponsorship">Sponsorship<a class="headerlink" href="#sponsorship" title="Permanent link">&para;</a></h2>
-<p>Help us keep Uvicorn maintained and sustainable by <a href="https://github.com/sponsors/Kludex">becoming a sponsor</a>.</p>
-<p><strong>Current sponsors:</strong></p>
-<div style="display: flex; flex-wrap: wrap; gap: 2rem; align-items: center; margin: 1rem 0;">
-    <a href="https://fastapi.tiangolo.com">
-        <img src="img/fastapi-logo.png" alt="FastAPI" style="height: 80px;">
-    </a>
-</div>
-
-<h2 id="quickstart">Quickstart<a class="headerlink" href="#quickstart" title="Permanent link">&para;</a></h2>
-<p><strong>Uvicorn</strong> is available on <a href="https://pypi.org/project/uvicorn/">PyPI</a> so installation is as simple as:</p>
+<h1 id="http-protocols">HTTP Protocols<a class="headerlink" href="#http-protocols" title="Permanent link">&para;</a></h1>
+<p>Uvicorn provides three HTTP/1.1 protocol implementations that you can choose from using the <a href="../../settings/#implementation"><code>--http</code></a> option:</p>
+<div class="highlight"><pre><span></span><code>uvicorn<span class="w"> </span>main:app<span class="w"> </span>--http<span class="w"> </span>&lt;auto<span class="p">|</span>h11<span class="p">|</span>httptools<span class="p">|</span>zttp&gt;
+</code></pre></div>
+<p>By default, Uvicorn uses <code>--http auto</code>, which automatically selects:</p>
+<ol>
+<li><strong>httptools</strong> - If <a href="https://github.com/MagicStack/httptools">httptools</a> is installed, Uvicorn will use it for maximum performance</li>
+<li><strong>h11</strong> - If httptools is not available, Uvicorn falls back to <a href="https://github.com/python-hyper/h11">h11</a></li>
+</ol>
+<h2 id="h11">h11<a class="headerlink" href="#h11" title="Permanent link">&para;</a></h2>
+<p><a href="https://github.com/python-hyper/h11">h11</a> is a pure Python HTTP/1.1 implementation. It is a required dependency of Uvicorn, so it is always available, and it is the only implementation compatible with PyPy.</p>
+<h2 id="httptools">httptools<a class="headerlink" href="#httptools" title="Permanent link">&para;</a></h2>
+<p><a href="https://github.com/MagicStack/httptools">httptools</a> is a Python binding for the Node.js HTTP parser. It is installed as part of the <code>uvicorn[standard]</code> optional extras, and provides greater performance than h11, but is not compatible with PyPy.</p>
+<h2 id="zttp">zttp<a class="headerlink" href="#zttp" title="Permanent link">&para;</a></h2>
+<p><a href="https://zttp.marcelotryle.com/">zttp</a> is a sans-IO HTTP parser for Python with a core written in Zig. Prebuilt wheels are available for CPython on Linux, macOS and Windows.</p>
+<p>You can install it with:</p>
 <div class="tabbed-set tabbed-alternate" data-tabs="1:2"><input checked="checked" id="__tabbed_1_1" name="__tabbed_1" type="radio" /><input id="__tabbed_1_2" name="__tabbed_1" type="radio" /><div class="tabbed-labels"><label for="__tabbed_1_1">pip</label><label for="__tabbed_1_2">uv</label></div>
 <div class="tabbed-content">
 <div class="tabbed-block">
-<div class="highlight"><pre><span></span><code>pip<span class="w"> </span>install<span class="w"> </span>uvicorn
+<div class="highlight"><pre><span></span><code>pip<span class="w"> </span>install<span class="w"> </span>zttp
 </code></pre></div>
 </div>
 <div class="tabbed-block">
-<div class="highlight"><pre><span></span><code>uv<span class="w"> </span>add<span class="w"> </span>uvicorn
+<div class="highlight"><pre><span></span><code>uv<span class="w"> </span>add<span class="w"> </span>zttp
 </code></pre></div>
 </div>
 </div>
 </div>
-<p>See the <a href="installation/">installation documentation</a> for more information.</p>
-<hr />
-<p>Let's create a simple ASGI application to run with Uvicorn:</p>
-<div class="highlight"><span class="filename">main.py</span><pre><span></span><code><span class="k">async</span> <span class="k">def</span><span class="w"> </span><span class="nf">app</span><span class="p">(</span><span class="n">scope</span><span class="p">,</span> <span class="n">receive</span><span class="p">,</span> <span class="n">send</span><span class="p">):</span>
-    <span class="k">assert</span> <span class="n">scope</span><span class="p">[</span><span class="s1">&#39;type&#39;</span><span class="p">]</span> <span class="o">==</span> <span class="s1">&#39;http&#39;</span>
-
-    <span class="k">await</span> <span class="n">send</span><span class="p">({</span>
-        <span class="s1">&#39;type&#39;</span><span class="p">:</span> <span class="s1">&#39;http.response.start&#39;</span><span class="p">,</span>
-        <span class="s1">&#39;status&#39;</span><span class="p">:</span> <span class="mi">200</span><span class="p">,</span>
-        <span class="s1">&#39;headers&#39;</span><span class="p">:</span> <span class="p">[</span>
-            <span class="p">(</span><span class="sa">b</span><span class="s1">&#39;content-type&#39;</span><span class="p">,</span> <span class="sa">b</span><span class="s1">&#39;text/plain&#39;</span><span class="p">),</span>
-            <span class="p">(</span><span class="sa">b</span><span class="s1">&#39;content-length&#39;</span><span class="p">,</span> <span class="sa">b</span><span class="s1">&#39;13&#39;</span><span class="p">),</span>
-        <span class="p">],</span>
-    <span class="p">})</span>
-    <span class="k">await</span> <span class="n">send</span><span class="p">({</span>
-        <span class="s1">&#39;type&#39;</span><span class="p">:</span> <span class="s1">&#39;http.response.body&#39;</span><span class="p">,</span>
-        <span class="s1">&#39;body&#39;</span><span class="p">:</span> <span class="sa">b</span><span class="s1">&#39;Hello, world!&#39;</span><span class="p">,</span>
-    <span class="p">})</span>
+<p>You can run <code>uvicorn</code> with <code>zttp</code> with the following command:</p>
+<div class="highlight"><pre><span></span><code>uvicorn<span class="w"> </span>main:app<span class="w"> </span>--http<span class="w"> </span>zttp
 </code></pre></div>
-<p>Then we can run it with Uvicorn:</p>
-<div class="highlight"><pre><span></span><code>uvicorn<span class="w"> </span>main:app
-</code></pre></div>
-<hr />
-<h2 id="usage">Usage<a class="headerlink" href="#usage" title="Permanent link">&para;</a></h2>
-<p>The uvicorn command line tool is the easiest way to run your application.</p>
-<h3 id="command-line-options">Command line options<a class="headerlink" href="#command-line-options" title="Permanent link">&para;</a></h3>
-<p>Run <code>uvicorn --help</code> to see the full set of command line options.</p>
-<p>For more information, see the <a href="settings/">settings documentation</a>.</p>
-<h3 id="running-programmatically">Running programmatically<a class="headerlink" href="#running-programmatically" title="Permanent link">&para;</a></h3>
-<p>There are several ways to run uvicorn directly from your application.</p>
-<h4 id="uvicornrun"><code>uvicorn.run</code><a class="headerlink" href="#uvicornrun" title="Permanent link">&para;</a></h4>
-<p>If you're looking for a programmatic equivalent of the <code>uvicorn</code> command line interface, use <code>uvicorn.run()</code>:</p>
-<div class="highlight"><span class="filename">main.py</span><pre><span></span><code><span class="kn">import</span><span class="w"> </span><span class="nn">uvicorn</span>
-
-<span class="k">async</span> <span class="k">def</span><span class="w"> </span><span class="nf">app</span><span class="p">(</span><span class="n">scope</span><span class="p">,</span> <span class="n">receive</span><span class="p">,</span> <span class="n">send</span><span class="p">):</span>
-    <span class="o">...</span>
-
-<span class="k">if</span> <span class="vm">__name__</span> <span class="o">==</span> <span class="s2">&quot;__main__&quot;</span><span class="p">:</span>
-    <span class="n">uvicorn</span><span class="o">.</span><span class="n">run</span><span class="p">(</span><span class="s2">&quot;main:app&quot;</span><span class="p">,</span> <span class="n">port</span><span class="o">=</span><span class="mi">5000</span><span class="p">,</span> <span class="n">log_level</span><span class="o">=</span><span class="s2">&quot;info&quot;</span><span class="p">)</span>
-</code></pre></div>
-<h4 id="config-and-server-instances"><code>Config</code> and <code>Server</code> instances<a class="headerlink" href="#config-and-server-instances" title="Permanent link">&para;</a></h4>
-<p>For more control over configuration and server lifecycle, use <code>uvicorn.Config</code> and <code>uvicorn.Server</code>:</p>
-<div class="highlight"><span class="filename">main.py</span><pre><span></span><code><span class="kn">import</span><span class="w"> </span><span class="nn">uvicorn</span>
-
-<span class="k">async</span> <span class="k">def</span><span class="w"> </span><span class="nf">app</span><span class="p">(</span><span class="n">scope</span><span class="p">,</span> <span class="n">receive</span><span class="p">,</span> <span class="n">send</span><span class="p">):</span>
-    <span class="o">...</span>
-
-<span class="k">if</span> <span class="vm">__name__</span> <span class="o">==</span> <span class="s2">&quot;__main__&quot;</span><span class="p">:</span>
-    <span class="n">config</span> <span class="o">=</span> <span class="n">uvicorn</span><span class="o">.</span><span class="n">Config</span><span class="p">(</span><span class="s2">&quot;main:app&quot;</span><span class="p">,</span> <span class="n">port</span><span class="o">=</span><span class="mi">5000</span><span class="p">,</span> <span class="n">log_level</span><span class="o">=</span><span class="s2">&quot;info&quot;</span><span class="p">)</span>
-    <span class="n">server</span> <span class="o">=</span> <span class="n">uvicorn</span><span class="o">.</span><span class="n">Server</span><span class="p">(</span><span class="n">config</span><span class="p">)</span>
-    <span class="n">server</span><span class="o">.</span><span class="n">run</span><span class="p">()</span>
-</code></pre></div>
-<p>If you'd like to run Uvicorn from an already running async environment, use <code>uvicorn.Server.serve()</code> instead:</p>
-<div class="highlight"><span class="filename">main.py</span><pre><span></span><code><span class="kn">import</span><span class="w"> </span><span class="nn">asyncio</span>
-<span class="kn">import</span><span class="w"> </span><span class="nn">uvicorn</span>
-
-<span class="k">async</span> <span class="k">def</span><span class="w"> </span><span class="nf">app</span><span class="p">(</span><span class="n">scope</span><span class="p">,</span> <span class="n">receive</span><span class="p">,</span> <span class="n">send</span><span class="p">):</span>
-    <span class="o">...</span>
-
-<span class="k">async</span> <span class="k">def</span><span class="w"> </span><span class="nf">main</span><span class="p">():</span>
-    <span class="n">config</span> <span class="o">=</span> <span class="n">uvicorn</span><span class="o">.</span><span class="n">Config</span><span class="p">(</span><span class="s2">&quot;main:app&quot;</span><span class="p">,</span> <span class="n">port</span><span class="o">=</span><span class="mi">5000</span><span class="p">,</span> <span class="n">log_level</span><span class="o">=</span><span class="s2">&quot;info&quot;</span><span class="p">)</span>
-    <span class="n">server</span> <span class="o">=</span> <span class="n">uvicorn</span><span class="o">.</span><span class="n">Server</span><span class="p">(</span><span class="n">config</span><span class="p">)</span>
-    <span class="k">await</span> <span class="n">server</span><span class="o">.</span><span class="n">serve</span><span class="p">()</span>
-
-<span class="k">if</span> <span class="vm">__name__</span> <span class="o">==</span> <span class="s2">&quot;__main__&quot;</span><span class="p">:</span>
-    <span class="n">asyncio</span><span class="o">.</span><span class="n">run</span><span class="p">(</span><span class="n">main</span><span class="p">())</span>
-</code></pre></div>
-<h3 id="running-with-gunicorn">Running with Gunicorn<a class="headerlink" href="#running-with-gunicorn" title="Permanent link">&para;</a></h3>
 <div class="admonition warning">
-<p class="admonition-title">Warning</p>
-<p>The <code>uvicorn.workers</code> module is deprecated and will be removed in a future release.</p>
-<p>You should use the <a href="https://github.com/Kludex/uvicorn-worker"><code>uvicorn-worker</code></a> package instead.</p>
-<div class="highlight"><pre><span></span><code>python<span class="w"> </span>-m<span class="w"> </span>pip<span class="w"> </span>install<span class="w"> </span>uvicorn-worker
-</code></pre></div>
+<p class="admonition-title">Experimental</p>
+<p>zttp support is currently <strong>experimental</strong> and <strong>not suited for production usage</strong>. If you try it out, please report any issues or feedback on the <a href="https://github.com/Kludex/uvicorn/issues">issue tracker</a>.</p>
 </div>
-<p><a href="https://gunicorn.org/">Gunicorn</a> is a mature, fully featured server and process manager.</p>
-<p>Uvicorn includes a Gunicorn worker class allowing you to run ASGI applications,
-with all of Uvicorn's performance benefits, while also giving you Gunicorn's
-fully-featured process management.</p>
-<p>This allows you to increase or decrease the number of worker processes on the
-fly, restart worker processes gracefully, or perform server upgrades without downtime.</p>
-<p>For production deployments we recommend using gunicorn with the uvicorn worker class.</p>
-<div class="highlight"><pre><span></span><code>gunicorn example:app -w 4 -k uvicorn.workers.UvicornWorker
-</code></pre></div>
-<p>For a <a href="https://pypy.org/">PyPy</a> compatible configuration use <code>uvicorn.workers.UvicornH11Worker</code>.</p>
-<p>For more information, see the <a href="deployment/">deployment documentation</a>.</p>
-<h3 id="application-factories">Application factories<a class="headerlink" href="#application-factories" title="Permanent link">&para;</a></h3>
-<p>The <code>--factory</code> flag allows loading the application from a factory function, rather than an application instance directly. The factory will be called with no arguments and should return an ASGI application.</p>
-<div class="highlight"><span class="filename">main.py</span><pre><span></span><code><span class="k">def</span><span class="w"> </span><span class="nf">create_app</span><span class="p">():</span>
-    <span class="n">app</span> <span class="o">=</span> <span class="o">...</span>
-    <span class="k">return</span> <span class="n">app</span>
-</code></pre></div>
-<div class="highlight"><pre><span></span><code>uvicorn<span class="w"> </span>--factory<span class="w"> </span>main:create_app
-</code></pre></div>
 
 
 
@@ -1268,15 +1046,31 @@ fly, restart worker processes gracefully, or perform server upgrades without dow
       
       <nav class="md-footer__inner md-grid" aria-label="Footer" >
         
+          
+          <a href="../logging/" class="md-footer__link md-footer__link--prev" aria-label="Previous: Logging">
+            <div class="md-footer__button md-icon">
+              
+              <svg xmlns="http://www.w3.org/2000/svg" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2" class="lucide lucide-arrow-left" viewBox="0 0 24 24"><path d="m12 19-7-7 7-7M19 12H5"/></svg>
+            </div>
+            <div class="md-footer__title">
+              <span class="md-footer__direction">
+                Previous
+              </span>
+              <div class="md-ellipsis">
+                Logging
+              </div>
+            </div>
+          </a>
+        
         
           
-          <a href="./installation/" class="md-footer__link md-footer__link--next" aria-label="Next: Installation">
+          <a href="../websockets/" class="md-footer__link md-footer__link--next" aria-label="Next: WebSockets">
             <div class="md-footer__title">
               <span class="md-footer__direction">
                 Next
               </span>
               <div class="md-ellipsis">
-                Installation
+                WebSockets
               </div>
             </div>
             <div class="md-footer__button md-icon">
@@ -1373,10 +1167,10 @@ fly, restart worker processes gracefully, or perform server upgrades without dow
     
       
       
-      <script id="__config" type="application/json">{"annotate":null,"base":".","features":["content.code.annotate","content.code.copy","content.tabs.link","navigation.footer","navigation.path","navigation.sections","navigation.top","navigation.tracking","search.suggest","search.highlight","toc.follow"],"search":"./assets/javascripts/workers/search.e2d2d235.min.js","tags":null,"translations":{"clipboard.copied":"Copied to clipboard","clipboard.copy":"Copy to clipboard","search.result.more.one":"1 more on this page","search.result.more.other":"# more on this page","search.result.none":"No matching documents","search.result.one":"1 matching document","search.result.other":"# matching documents","search.result.placeholder":"Type to start searching","search.result.term.missing":"Missing","select.version":"Select version"},"version":null}</script>
+      <script id="__config" type="application/json">{"annotate":null,"base":"../..","features":["content.code.annotate","content.code.copy","content.tabs.link","navigation.footer","navigation.path","navigation.sections","navigation.top","navigation.tracking","search.suggest","search.highlight","toc.follow"],"search":"../../assets/javascripts/workers/search.e2d2d235.min.js","tags":null,"translations":{"clipboard.copied":"Copied to clipboard","clipboard.copy":"Copy to clipboard","search.result.more.one":"1 more on this page","search.result.more.other":"# more on this page","search.result.none":"No matching documents","search.result.one":"1 matching document","search.result.other":"# matching documents","search.result.placeholder":"Type to start searching","search.result.term.missing":"Missing","select.version":"Select version"},"version":null}</script>
     
     
-      <script src="./assets/javascripts/bundle.6e5f0216.min.js"></script>
+      <script src="../../assets/javascripts/bundle.6e5f0216.min.js"></script>
       
     
   </body>

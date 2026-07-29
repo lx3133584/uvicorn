@@ -513,6 +513,23 @@
     </span>
   </a>
   
+    <nav class="md-nav" aria-label="Resource Limits">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#concurrency-and-backlog" class="md-nav__link">
+    <span class="md-ellipsis">
+      <span class="md-typeset">
+        Concurrency and backlog
+      </span>
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
 </li>
       
         <li class="md-nav__item">
@@ -703,6 +720,33 @@
     
   
   Logging
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../concepts/http-protocols/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  HTTP Protocols
 
     
   </span>
@@ -1108,6 +1152,23 @@
     </span>
   </a>
   
+    <nav class="md-nav" aria-label="Resource Limits">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#concurrency-and-backlog" class="md-nav__link">
+    <span class="md-ellipsis">
+      <span class="md-typeset">
+        Concurrency and backlog
+      </span>
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
 </li>
       
         <li class="md-nav__item">
@@ -1236,9 +1297,15 @@
 <h2 id="resource-limits">Resource Limits<a class="headerlink" href="#resource-limits" title="Permanent link">&para;</a></h2>
 <p>Uvicorn provides the following resource limiting:</p>
 <ul>
-<li>Concurrency. Defaults to <code>None</code>. If set, this provides a maximum number of concurrent tasks <em>or</em> open connections that should be allowed. Any new requests or connections that occur once this limit has been reached will result in a "503 Service Unavailable" response. Setting this value to a limit that you know your servers are able to support will help ensure reliable resource usage, even against significantly over-resourced servers.</li>
-<li>Max requests. Defaults to <code>None</code>. If set, this provides a maximum number of HTTP requests that will be serviced before terminating a process. Together with a process manager this can be used to prevent memory leaks from impacting long running processes.</li>
+<li>Concurrency (<code>--limit-concurrency</code>). Defaults to <code>None</code>. If set, this provides a maximum number of concurrent tasks <em>or</em> open connections that should be allowed. Any new requests that arrive once this limit has been reached will result in a "503 Service Unavailable" response. Setting this value to a limit that you know your servers are able to support will help ensure reliable resource usage, even against significantly over-resourced servers.</li>
+<li>Backlog (<code>--backlog</code>). Defaults to <code>2048</code>. The maximum number of connections the operating system will hold in the socket's accept queue before the worker accepts them. This is passed straight to the listening socket's <code>listen()</code> call.</li>
+<li>Max requests (<code>--limit-max-requests</code>). Defaults to <code>None</code>. If set, this provides a maximum number of HTTP requests that will be serviced before terminating a process. Together with a process manager this can be used to prevent memory leaks from impacting long running processes.</li>
 </ul>
+<h3 id="concurrency-and-backlog">Concurrency and backlog<a class="headerlink" href="#concurrency-and-backlog" title="Permanent link">&para;</a></h3>
+<p><code>--limit-concurrency</code> and <code>--backlog</code> operate at different layers and do not interact. It is a common misconception that requests refused by <code>--limit-concurrency</code> are held in the <code>--backlog</code>; they are not.</p>
+<p><strong><code>--limit-concurrency</code> is an application-level gate.</strong> When a request's headers have been fully received, Uvicorn checks whether the number of open connections <em>or</em> the number of in-flight request/response tasks has reached the limit. If so, it responds immediately with a "503 Service Unavailable" - the request is <strong>not</strong> queued and does <strong>not</strong> wait for a slot to free up. Both counts include the connection serving the current request, so a value of <code>N</code> admits at most <code>N - 1</code> <em>other</em> concurrent requests; in particular a value of <code>1</code> refuses every request. Note that the open-connection count includes idle keep-alive connections, so those also consume the budget: once the number of open connections reaches the limit, further requests are refused even if few requests are actively being processed. Because the check only runs after a connection has been accepted, <code>--limit-concurrency</code> does not stop connections from being accepted in the first place - that is governed by <code>--backlog</code>.</p>
+<p><strong><code>--backlog</code> is an OS-level socket setting.</strong> It bounds the kernel's accept queue: connections that have completed the TCP handshake but that the worker has not yet <code>accept()</code>ed. Uvicorn accepts new connections eagerly, so under normal operation this queue stays near-empty and the setting has little observable effect. It only comes into play when connections arrive faster than the worker can accept them (for example during a large burst, or while the event loop is blocked). Once the queue is full the kernel stops accepting new connection attempts, and clients see a connection failure or timeout rather than a 503 (TCP will typically retry). Note that <code>--backlog</code> does not limit the number of connections a worker will ultimately serve - it only limits how many may sit <em>unaccepted</em> at once.</p>
+<p>To make the distinction concrete, consider <code>--limit-concurrency 5</code> with a slow application and a burst of simultaneous requests: once the limit is reached, the excess requests receive a 503 essentially immediately - they are not held in the backlog and processed later. To instead <em>queue</em> excess load, put a reverse proxy (e.g. nginx) in front of Uvicorn, or scale out with more workers.</p>
 <hr />
 <h2 id="server-errors">Server Errors<a class="headerlink" href="#server-errors" title="Permanent link">&para;</a></h2>
 <p>Server errors will be logged at the <code>error</code> log level. All logging defaults to being written to <code>stdout</code>.</p>
