@@ -1388,39 +1388,32 @@ async def test_server_keepalive_ping_timeout(
             assert exc_info.value.rcvd.reason == "keepalive ping timeout"
 
 
+class MockWriteTransport:
+    """Minimal transport for driving a websocket protocol's write path in-process."""
+
+    def __init__(self) -> None:
+        self.buffer = b""
+        self.closed = False
+
+    def get_extra_info(self, name: str, default: Any = None) -> Any:
+        return {"sockname": ("127.0.0.1", 8000), "peername": ("127.0.0.1", 8001)}.get(name, default)
+
+    def write(self, data: bytes) -> None:
+        self.buffer += data
+
+    def close(self) -> None:
+        self.closed = True
+
+    def is_closing(self) -> bool:
+        return self.closed
+
+
 async def test_send_respects_write_backpressure(ws_protocol_cls: WSProtocol, http_protocol_cls: HTTPProtocol):
     """Test that `send()` blocks while the transport's write buffer is full.
 
     Without backpressure, a server-initiated close can outrun in-flight data.
     See https://github.com/Kludex/uvicorn/issues/3047.
     """
-
-    class MockTransport:
-        def __init__(self) -> None:
-            self.buffer = b""
-            self.closed = False
-
-        def get_extra_info(self, name: str, default: Any = None) -> Any:
-            return {"sockname": ("127.0.0.1", 8000), "peername": ("127.0.0.1", 8001)}.get(name, default)
-
-        def write(self, data: bytes) -> None:
-            self.buffer += data
-
-        def close(self) -> None:
-            self.closed = True
-
-        def is_closing(self) -> bool:
-            return self.closed
-
-        def pause_reading(self) -> None:
-            pass
-
-        def resume_reading(self) -> None:
-            pass
-
-        def set_write_buffer_limits(self, high: int | None = None, low: int | None = None) -> None:
-            pass
-
     handshake = (
         b"GET / HTTP/1.1\r\n"
         b"Host: 127.0.0.1\r\n"
@@ -1445,7 +1438,7 @@ async def test_send_respects_write_backpressure(ws_protocol_cls: WSProtocol, htt
     config = Config(app=app, ws=ws_protocol_cls, http=http_protocol_cls, lifespan="off")
     config.load()
     protocol = ws_protocol_cls(config=config, server_state=ServerState(), app_state={})
-    transport = MockTransport()
+    transport = MockWriteTransport()
     protocol.connection_made(transport)  # type: ignore[arg-type]
     protocol.data_received(handshake)
     await accepted.wait()
@@ -1473,33 +1466,6 @@ async def test_connection_lost_unblocks_paused_send(ws_protocol_cls: WSProtocol,
     asyncio never calls resume_writing() on a transport that is lost while paused, so
     connection_lost() must wake pending senders or the ASGI task leaks forever.
     """
-
-    class MockTransport:
-        def __init__(self) -> None:
-            self.buffer = b""
-            self.closed = False
-
-        def get_extra_info(self, name: str, default: Any = None) -> Any:
-            return {"sockname": ("127.0.0.1", 8000), "peername": ("127.0.0.1", 8001)}.get(name, default)
-
-        def write(self, data: bytes) -> None:
-            self.buffer += data
-
-        def close(self) -> None:
-            self.closed = True
-
-        def is_closing(self) -> bool:
-            return self.closed
-
-        def pause_reading(self) -> None:
-            pass
-
-        def resume_reading(self) -> None:
-            pass
-
-        def set_write_buffer_limits(self, high: int | None = None, low: int | None = None) -> None:
-            pass
-
     handshake = (
         b"GET / HTTP/1.1\r\n"
         b"Host: 127.0.0.1\r\n"
@@ -1526,7 +1492,7 @@ async def test_connection_lost_unblocks_paused_send(ws_protocol_cls: WSProtocol,
     config = Config(app=app, ws=ws_protocol_cls, http=http_protocol_cls, lifespan="off")
     config.load()
     protocol = ws_protocol_cls(config=config, server_state=ServerState(), app_state={})
-    transport = MockTransport()
+    transport = MockWriteTransport()
     protocol.connection_made(transport)  # type: ignore[arg-type]
     protocol.data_received(handshake)
     await accepted.wait()
