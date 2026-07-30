@@ -99,6 +99,10 @@ class WSProtocol(asyncio.Protocol):
         self.queue: asyncio.Queue[WebSocketEvent] = asyncio.Queue()
         self.handshake_complete = False
         self.close_sent = False
+        # Pending deferred transport close, while we wait for the peer's close reply.
+        self.close_timer: TimerHandle | None = None
+        # Matches the default close_timeout of the websockets library.
+        self.close_timeout = 10.0
 
         # Rejection state
         self.response_started = False
@@ -148,6 +152,9 @@ class WSProtocol(asyncio.Protocol):
         # Unblock any send() awaiting writable: asyncio never calls resume_writing() on a
         # transport that is lost while paused, and the buffer will never drain now.
         self.writable.set()
+        if self.close_timer is not None:
+            self.close_timer.cancel()
+            self.close_timer = None
         if exc is None:
             self.transport.close()
 
@@ -171,6 +178,9 @@ class WSProtocol(asyncio.Protocol):
     def handle_events(self) -> None:
         for event in self.conn.events():
             if self.close_sent:
+                # We already closed; the peer's close frame completes the handshake.
+                if isinstance(event, events.CloseConnection):
+                    self.complete_closing_handshake()
                 return
             if isinstance(event, events.Request):
                 self.handle_connect(event)
@@ -350,7 +360,9 @@ class WSProtocol(asyncio.Protocol):
                 self.send_500_response()
             elif result is not None:
                 self.logger.error("ASGI callable should return None, but returned '%s'.", result)
-        self.transport.close()
+        if self.close_timer is None:
+            # Leave the transport open while the closing handshake is pending.
+            self.transport.close()
 
     async def send(self, message: ASGISendEvent) -> None:
         await self.writable.wait()
@@ -438,7 +450,7 @@ class WSProtocol(asyncio.Protocol):
                     output = self.conn.send(wsproto.events.CloseConnection(code=code, reason=reason))
                     if not self.transport.is_closing():
                         self.transport.write(output)
-                        self.transport.close()
+                        self.defer_close()
 
                 else:
                     raise RuntimeError(
@@ -463,6 +475,32 @@ class WSProtocol(asyncio.Protocol):
 
         else:
             raise RuntimeError(f"Unexpected ASGI message '{message['type']}', after sending 'websocket.close'.")
+
+    def defer_close(self) -> None:
+        """Close the transport once the peer echoes our close frame, or on timeout.
+
+        RFC 6455 §5.5.1 requires the peer to echo our close frame. Closing the transport
+        right away makes that reply land on a closed socket, which the kernel answers
+        with a TCP RST, discarding whatever the peer had not read yet. §7.1.1 allows us
+        to close first once the reply is late, hence the timeout.
+        """
+        # Reads may be paused waiting for the app to consume a message; the close reply
+        # would then never be read, so resume them for the duration of the handshake.
+        if self.read_paused:
+            self.read_paused = False
+            self.transport.resume_reading()
+        self.close_timer = self.loop.call_later(self.close_timeout, self.close_transport)
+
+    def complete_closing_handshake(self) -> None:
+        if self.close_timer is not None:
+            self.close_timer.cancel()
+            self.close_timer = None
+            self.transport.close()
+
+    def close_transport(self) -> None:
+        # The peer never echoed our close frame; stop waiting for it.
+        self.close_timer = None
+        self.transport.close()
 
     async def receive(self) -> WebSocketEvent:
         message = await self.queue.get()

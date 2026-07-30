@@ -16,6 +16,7 @@ from websockets.typing import Subprotocol
 from tests.response import Response
 from tests.utils import run_server
 from uvicorn._types import (
+    ASGIApplication,
     ASGIReceiveCallable,
     ASGIReceiveEvent,
     ASGISendCallable,
@@ -1388,12 +1389,25 @@ async def test_server_keepalive_ping_timeout(
             assert exc_info.value.rcvd.reason == "keepalive ping timeout"
 
 
+WS_HANDSHAKE_REQUEST = (
+    b"GET / HTTP/1.1\r\n"
+    b"Host: 127.0.0.1\r\n"
+    b"Upgrade: websocket\r\n"
+    b"Connection: Upgrade\r\n"
+    b"Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n"
+    b"Sec-WebSocket-Version: 13\r\n\r\n"
+)
+CLIENT_CLOSE_FRAME = b"\x88\x82\x00\x00\x00\x00\x03\xe8"  # masked close, code 1000
+CLIENT_TEXT_FRAME = b"\x81\x81\x00\x00\x00\x00x"  # masked text frame, payload "x"
+
+
 class MockWriteTransport:
     """Minimal transport for driving a websocket protocol's write path in-process."""
 
     def __init__(self) -> None:
         self.buffer = b""
         self.closed = False
+        self.reading_paused = False
 
     def get_extra_info(self, name: str, default: Any = None) -> Any:
         return {"sockname": ("127.0.0.1", 8000), "peername": ("127.0.0.1", 8001)}.get(name, default)
@@ -1407,6 +1421,25 @@ class MockWriteTransport:
     def is_closing(self) -> bool:
         return self.closed
 
+    def pause_reading(self) -> None:
+        self.reading_paused = True
+
+    def resume_reading(self) -> None:
+        self.reading_paused = False
+
+
+def connected_ws_protocol(
+    app: ASGIApplication, ws_protocol_cls: WSProtocol, http_protocol_cls: HTTPProtocol
+) -> tuple[Any, MockWriteTransport]:
+    """Return a websocket protocol driven by a mock transport, past the handshake."""
+    config = Config(app=app, ws=ws_protocol_cls, http=http_protocol_cls, lifespan="off")
+    config.load()
+    protocol = ws_protocol_cls(config=config, server_state=ServerState(), app_state={})
+    transport = MockWriteTransport()
+    protocol.connection_made(transport)  # type: ignore[arg-type]
+    protocol.data_received(WS_HANDSHAKE_REQUEST)
+    return protocol, transport
+
 
 async def test_send_respects_write_backpressure(ws_protocol_cls: WSProtocol, http_protocol_cls: HTTPProtocol):
     """Test that `send()` blocks while the transport's write buffer is full.
@@ -1414,15 +1447,6 @@ async def test_send_respects_write_backpressure(ws_protocol_cls: WSProtocol, htt
     Without backpressure, a server-initiated close can outrun in-flight data.
     See https://github.com/Kludex/uvicorn/issues/3047.
     """
-    handshake = (
-        b"GET / HTTP/1.1\r\n"
-        b"Host: 127.0.0.1\r\n"
-        b"Upgrade: websocket\r\n"
-        b"Connection: Upgrade\r\n"
-        b"Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n"
-        b"Sec-WebSocket-Version: 13\r\n\r\n"
-    )
-
     accepted = asyncio.Event()
     close_requested = asyncio.Event()
     close_sent = asyncio.Event()
@@ -1435,12 +1459,7 @@ async def test_send_respects_write_backpressure(ws_protocol_cls: WSProtocol, htt
         await send({"type": "websocket.close", "code": 1000})
         close_sent.set()
 
-    config = Config(app=app, ws=ws_protocol_cls, http=http_protocol_cls, lifespan="off")
-    config.load()
-    protocol = ws_protocol_cls(config=config, server_state=ServerState(), app_state={})
-    transport = MockWriteTransport()
-    protocol.connection_made(transport)  # type: ignore[arg-type]
-    protocol.data_received(handshake)
+    protocol, transport = connected_ws_protocol(app, ws_protocol_cls, http_protocol_cls)
     await accepted.wait()
 
     # The transport reports a full write buffer: send() must block.
@@ -1455,9 +1474,128 @@ async def test_send_respects_write_backpressure(ws_protocol_cls: WSProtocol, htt
     # The buffer drained: the pending close goes through.
     protocol.resume_writing()
     await close_sent.wait()
+
+    protocol.data_received(CLIENT_CLOSE_FRAME)
     assert transport.closed
 
     protocol.connection_lost(None)
+
+
+async def test_close_waits_for_client_close_reply(ws_protocol_cls: WSProtocol, http_protocol_cls: HTTPProtocol):
+    """Test that a server-initiated close keeps the transport open until the client replies.
+
+    Closing it right away makes the client's reply (RFC 6455 5.5.1) land on a closed
+    socket, which the kernel answers with a TCP RST that discards data the client has
+    not read yet. See https://github.com/Kludex/uvicorn/issues/3047.
+    """
+    accepted = asyncio.Event()
+    app_finished = asyncio.Event()
+
+    async def app(scope: Scope, receive: ASGIReceiveCallable, send: ASGISendCallable):
+        await receive()  # websocket.connect
+        await send({"type": "websocket.accept"})
+        accepted.set()
+        await send({"type": "websocket.send", "text": "x"})
+        await send({"type": "websocket.close", "code": 1000})
+        app_finished.set()
+
+    protocol, transport = connected_ws_protocol(app, ws_protocol_cls, http_protocol_cls)
+    await accepted.wait()
+    await app_finished.wait()
+    # The app is done, but the closing handshake is not: even run_asgi must leave it open.
+    for _ in range(10):
+        await asyncio.sleep(0)
+    assert not transport.closed
+
+    protocol.data_received(CLIENT_CLOSE_FRAME)
+    assert transport.closed
+
+    protocol.connection_lost(None)
+
+
+async def test_close_gives_up_when_client_never_replies(ws_protocol_cls: WSProtocol, http_protocol_cls: HTTPProtocol):
+    """Test that a client that never echoes the close frame cannot keep the connection.
+
+    RFC 6455 7.1.1 lets the server close the connection once the reply is late.
+    """
+    accepted = asyncio.Event()
+
+    async def app(scope: Scope, receive: ASGIReceiveCallable, send: ASGISendCallable):
+        await receive()  # websocket.connect
+        await send({"type": "websocket.accept"})
+        accepted.set()
+        await send({"type": "websocket.close", "code": 1000})
+
+    protocol, transport = connected_ws_protocol(app, ws_protocol_cls, http_protocol_cls)
+    await accepted.wait()
+    for _ in range(10):
+        await asyncio.sleep(0)
+    assert not transport.closed
+    assert protocol.close_timer is not None
+
+    protocol.close_transport()  # the close timeout expires
+    assert transport.closed
+    assert protocol.close_timer is None
+
+    protocol.connection_lost(None)
+
+
+async def test_close_resumes_paused_reads(ws_protocol_cls: WSProtocol, http_protocol_cls: HTTPProtocol):
+    """Test that waiting for the client's close reply resumes paused reads.
+
+    Reads stay paused until the app consumes a message, so an app that closes without
+    consuming one would otherwise never see the close reply it is waiting for.
+    """
+    accepted = asyncio.Event()
+    message_queued = asyncio.Event()
+
+    async def app(scope: Scope, receive: ASGIReceiveCallable, send: ASGISendCallable):
+        await receive()  # websocket.connect
+        await send({"type": "websocket.accept"})
+        accepted.set()
+        await message_queued.wait()
+        # Close without consuming the queued message, leaving reads paused.
+        await send({"type": "websocket.close", "code": 1000})
+
+    protocol, transport = connected_ws_protocol(app, ws_protocol_cls, http_protocol_cls)
+    await accepted.wait()
+
+    protocol.data_received(CLIENT_TEXT_FRAME)
+    assert transport.reading_paused
+    message_queued.set()
+    for _ in range(10):
+        await asyncio.sleep(0)
+    assert not transport.reading_paused
+
+    protocol.data_received(CLIENT_CLOSE_FRAME)
+    assert transport.closed
+
+    protocol.connection_lost(None)
+
+
+async def test_connection_lost_cancels_pending_close_timer(
+    ws_protocol_cls: WSProtocol, http_protocol_cls: HTTPProtocol
+):
+    """Test that losing the connection stops waiting for the client's close reply.
+
+    The reply can no longer arrive, so the pending timer must not outlive the connection.
+    """
+    accepted = asyncio.Event()
+
+    async def app(scope: Scope, receive: ASGIReceiveCallable, send: ASGISendCallable):
+        await receive()  # websocket.connect
+        await send({"type": "websocket.accept"})
+        accepted.set()
+        await send({"type": "websocket.close", "code": 1000})
+
+    protocol, _ = connected_ws_protocol(app, ws_protocol_cls, http_protocol_cls)
+    await accepted.wait()
+    for _ in range(10):
+        await asyncio.sleep(0)
+    assert protocol.close_timer is not None
+
+    protocol.connection_lost(None)
+    assert protocol.close_timer is None
 
 
 async def test_connection_lost_unblocks_paused_send(ws_protocol_cls: WSProtocol, http_protocol_cls: HTTPProtocol):
@@ -1466,15 +1604,6 @@ async def test_connection_lost_unblocks_paused_send(ws_protocol_cls: WSProtocol,
     asyncio never calls resume_writing() on a transport that is lost while paused, so
     connection_lost() must wake pending senders or the ASGI task leaks forever.
     """
-    handshake = (
-        b"GET / HTTP/1.1\r\n"
-        b"Host: 127.0.0.1\r\n"
-        b"Upgrade: websocket\r\n"
-        b"Connection: Upgrade\r\n"
-        b"Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n"
-        b"Sec-WebSocket-Version: 13\r\n\r\n"
-    )
-
     accepted = asyncio.Event()
     send_requested = asyncio.Event()
     app_finished = asyncio.Event()
@@ -1489,12 +1618,7 @@ async def test_connection_lost_unblocks_paused_send(ws_protocol_cls: WSProtocol,
         finally:
             app_finished.set()
 
-    config = Config(app=app, ws=ws_protocol_cls, http=http_protocol_cls, lifespan="off")
-    config.load()
-    protocol = ws_protocol_cls(config=config, server_state=ServerState(), app_state={})
-    transport = MockWriteTransport()
-    protocol.connection_made(transport)  # type: ignore[arg-type]
-    protocol.data_received(handshake)
+    protocol, transport = connected_ws_protocol(app, ws_protocol_cls, http_protocol_cls)
     await accepted.wait()
 
     # The write buffer fills up, then the client aborts while send() is blocked.
