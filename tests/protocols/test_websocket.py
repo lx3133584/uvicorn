@@ -22,6 +22,7 @@ from uvicorn._types import (
     ASGIReceiveCallable,
     ASGIReceiveEvent,
     ASGISendCallable,
+    ASGIVersions,
     Scope,
     WebSocketCloseEvent,
     WebSocketConnectEvent,
@@ -129,6 +130,24 @@ async def test_accept_connection(ws_protocol_cls: WSProtocol, http_protocol_cls:
     async with run_server(config):
         is_open = await open_connection(f"ws://127.0.0.1:{unused_tcp_port}")
         assert is_open
+
+
+async def test_asgi_spec_version(ws_protocol_cls: WSProtocol, http_protocol_cls: HTTPProtocol, unused_tcp_port: int):
+    asgi: ASGIVersions | None = None
+
+    async def app(scope: Scope, receive: ASGIReceiveCallable, send: ASGISendCallable):
+        nonlocal asgi
+        assert scope["type"] == "websocket"
+        asgi = scope["asgi"]
+        await receive()
+        await send({"type": "websocket.accept"})
+
+    config = Config(app=app, ws=ws_protocol_cls, http=http_protocol_cls, lifespan="off", port=unused_tcp_port)
+    async with run_server(config):
+        async with connect(f"ws://127.0.0.1:{unused_tcp_port}"):
+            pass
+
+    assert asgi == {"version": "3.0", "spec_version": "2.5"}
 
 
 async def test_shutdown(ws_protocol_cls: WSProtocol, http_protocol_cls: HTTPProtocol, unused_tcp_port: int):
@@ -621,7 +640,7 @@ async def test_connection_lost_before_handshake_complete(
         send_accept_task.set()
         await asyncio.sleep(0.1)
 
-    assert disconnect_message == {"type": "websocket.disconnect", "code": 1006}
+    assert disconnect_message == {"type": "websocket.disconnect", "code": 1006, "reason": ""}
     await task
 
 
@@ -659,7 +678,7 @@ async def test_send_close_on_server_shutdown(
     assert websocket is not None
     assert websocket.close_code == 1012
     assert disconnect_message_before_shutdown == {}
-    assert disconnect_message == {"type": "websocket.disconnect", "code": 1012}
+    assert disconnect_message == {"type": "websocket.disconnect", "code": 1012, "reason": ""}
     task.cancel()
 
 
@@ -846,7 +865,7 @@ async def test_server_reject_connection(
     async with run_server(config):
         await websocket_session(f"ws://127.0.0.1:{unused_tcp_port}")
 
-    assert disconnected_message == {"type": "websocket.disconnect", "code": 1006}
+    assert disconnected_message == {"type": "websocket.disconnect", "code": 1006, "reason": ""}
 
 
 class EmptyDict(TypedDict): ...
@@ -880,7 +899,7 @@ async def test_server_reject_connection_with_response(
     async with run_server(config):
         await websocket_session(f"ws://127.0.0.1:{unused_tcp_port}")
 
-    assert disconnected_message == {"type": "websocket.disconnect", "code": 1006}
+    assert disconnected_message == {"type": "websocket.disconnect", "code": 1006, "reason": ""}
 
 
 async def test_server_reject_connection_with_custom_content_headers(
@@ -973,7 +992,7 @@ async def test_server_reject_connection_with_multibody_response(
     async with run_server(config):
         await websocket_session(f"ws://127.0.0.1:{unused_tcp_port}")
 
-    assert disconnected_message == {"type": "websocket.disconnect", "code": 1006}
+    assert disconnected_message == {"type": "websocket.disconnect", "code": 1006, "reason": ""}
 
 
 async def test_server_reject_connection_with_invalid_status(

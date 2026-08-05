@@ -196,7 +196,7 @@ class WebSocketProtocol(WebSocketServerProtocol):
 
         self.scope = {
             "type": "websocket",
-            "asgi": {"version": self.asgi_version, "spec_version": "2.4"},
+            "asgi": {"version": self.asgi_version, "spec_version": "2.5"},
             "http_version": "1.1",
             "scheme": self.scheme,
             "server": self.server,
@@ -372,18 +372,18 @@ class WebSocketProtocol(WebSocketServerProtocol):
         if self.lost_connection_before_handshake:
             # If the handshake failed or the app closed before handshake completion,
             # use 1006 Abnormal Closure.
-            return {"type": "websocket.disconnect", "code": 1006}
+            return {"type": "websocket.disconnect", "code": 1006, "reason": ""}
 
         if self.closed_event.is_set():
-            return {"type": "websocket.disconnect", "code": 1005}
+            return {"type": "websocket.disconnect", "code": 1005, "reason": ""}
 
         try:
             data = await self.recv()
         except ConnectionClosed:
             self.closed_event.set()
             if self.ws_server.closing:
-                return {"type": "websocket.disconnect", "code": 1012}
-            return {"type": "websocket.disconnect", "code": self.close_code or 1005, "reason": self.close_reason}
+                return {"type": "websocket.disconnect", "code": 1012, "reason": ""}
+            return {"type": "websocket.disconnect", "code": self.close_code or 1005, "reason": self.close_reason or ""}
 
         if isinstance(data, str):
             return {"type": "websocket.receive", "text": data}

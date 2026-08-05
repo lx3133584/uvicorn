@@ -141,7 +141,7 @@ class WebSocketsSansIOProtocol(asyncio.Protocol):
     def connection_lost(self, exc: Exception | None) -> None:
         self.stop_keepalive()
         code = 1005 if self.handshake_complete else 1006
-        self.queue.put_nowait({"type": "websocket.disconnect", "code": code})
+        self.queue.put_nowait({"type": "websocket.disconnect", "code": code, "reason": ""})
         self.connections.remove(self)
 
         if self.logger.level <= TRACE_LOG_LEVEL:
@@ -183,7 +183,7 @@ class WebSocketsSansIOProtocol(asyncio.Protocol):
             self.transport.close()
             return
         if self.handshake_complete:
-            self.queue.put_nowait({"type": "websocket.disconnect", "code": 1012})
+            self.queue.put_nowait({"type": "websocket.disconnect", "code": 1012, "reason": ""})
             self.conn.send_close(1012)
             output = self.conn.data_to_send()
             self.transport.write(b"".join(output))
@@ -250,7 +250,7 @@ class WebSocketsSansIOProtocol(asyncio.Protocol):
             subprotocols.extend([token.strip() for token in header.split(",")])
         self.scope: WebSocketScope = {
             "type": "websocket",
-            "asgi": {"version": self.asgi_version, "spec_version": "2.4"},
+            "asgi": {"version": self.asgi_version, "spec_version": "2.5"},
             "http_version": "1.1",
             "scheme": self.scheme,
             "server": self.server,
@@ -459,7 +459,7 @@ class WebSocketsSansIOProtocol(asyncio.Protocol):
                     self.start_keepalive()
 
             elif message["type"] == "websocket.close":
-                self.queue.put_nowait({"type": "websocket.disconnect", "code": 1006})
+                self.queue.put_nowait({"type": "websocket.disconnect", "code": 1006, "reason": ""})
                 self.logger.info(
                     '%s - "WebSocket %s" 403',
                     get_client_addr(self.scope),
@@ -535,7 +535,7 @@ class WebSocketsSansIOProtocol(asyncio.Protocol):
                     response_headers.setdefault("Content-Length", str(len(body)))
                     response_headers.setdefault("Content-Type", "text/plain; charset=utf-8")
                     response = Response(status_code, STATUS_PHRASES[status_code], response_headers, body)
-                    self.queue.put_nowait({"type": "websocket.disconnect", "code": 1006})
+                    self.queue.put_nowait({"type": "websocket.disconnect", "code": 1006, "reason": ""})
                     self.conn.send_response(response)
                     output = self.conn.data_to_send()
                     self.close_sent = True
