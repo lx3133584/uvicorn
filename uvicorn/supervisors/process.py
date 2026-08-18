@@ -30,9 +30,9 @@ def _listen(child_conn: Connection, server: Server) -> None:
             if command == PING:
                 child_conn.send(server.started)
             elif command == SHUTDOWN:
-                server.request_shutdown()
+                server.should_exit = True
         except (OSError, EOFError):
-            server.request_shutdown()
+            server.should_exit = True
             return
 
 

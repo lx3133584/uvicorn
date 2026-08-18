@@ -339,11 +339,9 @@ class Server:
         for captured_signal in reversed(self._captured_signals):
             signal.raise_signal(captured_signal)
 
-    def request_shutdown(self, force: bool = False) -> None:
-        self.should_exit = True
-        if force:
-            self.force_exit = True  # pragma: full coverage
-
     def handle_exit(self, sig: int, frame: FrameType | None) -> None:
         self._captured_signals.append(sig)
-        self.request_shutdown(force=self.should_exit and sig == signal.SIGINT)
+        if self.should_exit and sig == signal.SIGINT:
+            self.force_exit = True  # pragma: full coverage
+        else:
+            self.should_exit = True
