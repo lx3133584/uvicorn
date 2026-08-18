@@ -1,8 +1,6 @@
 from __future__ import annotations
 
-import functools
 import logging
-import multiprocessing
 import os
 import signal
 import sys
@@ -35,14 +33,19 @@ class BaseReload:
         config: Config,
         target: Callable[[list[socket] | None], None],
         sockets: list[socket],
+        shutdown_event: Event,
     ) -> None:
         self.config = config
         self.target = target
         self.sockets = sockets
         self.should_exit = threading.Event()
         self.pid = os.getpid()
-        self.shutdown_event: Event | None = None
+        self._shutdown_event = shutdown_event
         self.reloader_name: str | None = None
+
+    @property
+    def shutdown_event(self) -> Event:
+        return self._shutdown_event
 
     def signal_handler(self, sig: int, frame: FrameType | None) -> None:  # pragma: full coverage
         """
@@ -87,28 +90,23 @@ class BaseReload:
         self.process = self._start_process()
 
     def _start_process(self) -> BaseProcess:
-        target = self.target
-        if sys.platform == "win32":  # pragma: py-not-win32
-            self.shutdown_event = multiprocessing.get_context("spawn").Event()
-            target = functools.partial(target, _shutdown_event=self.shutdown_event)
-
-        process = get_subprocess(config=self.config, target=target, sockets=self.sockets)
+        process = get_subprocess(config=self.config, target=self.target, sockets=self.sockets)
         process.start()
         return process
 
     def restart(self) -> None:
         if sys.platform == "win32":  # pragma: py-not-win32
-            assert self.shutdown_event is not None
             self.shutdown_event.set()
         else:  # pragma: py-win32
             self.process.terminate()
         self.process.join()
 
+        if sys.platform == "win32":  # pragma: py-not-win32
+            self.shutdown_event.clear()
         self.process = self._start_process()
 
     def shutdown(self) -> None:
         if sys.platform == "win32":
-            assert self.shutdown_event is not None  # pragma: py-not-win32
             self.shutdown_event.set()  # pragma: py-not-win32
         else:
             self.process.terminate()  # pragma: py-win32

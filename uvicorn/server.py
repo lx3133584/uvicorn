@@ -4,6 +4,7 @@ import asyncio
 import contextlib
 import functools
 import logging
+import multiprocessing
 import os
 import platform
 import random
@@ -76,12 +77,13 @@ class Server:
             return None
         return self.config.limit_max_requests + random.randint(0, self.config.limit_max_requests_jitter)
 
-    def run(
-        self,
-        sockets: list[socket.socket] | None = None,
-        _shutdown_event: Event | None = None,
-    ) -> None:
-        self._shutdown_event = _shutdown_event
+    @property
+    def shutdown_event(self) -> Event:
+        if self._shutdown_event is None:
+            self._shutdown_event = multiprocessing.get_context("spawn").Event()
+        return self._shutdown_event
+
+    def run(self, sockets: list[socket.socket] | None = None) -> None:
         return asyncio_run(self.serve(sockets=sockets), loop_factory=self.config.get_loop_factory())
 
     async def serve(self, sockets: list[socket.socket] | None = None) -> None:

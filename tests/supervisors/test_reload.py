@@ -1,10 +1,12 @@
 from __future__ import annotations
 
+import multiprocessing
 import signal
 import socket
 import subprocess
 import sys
 from collections.abc import Callable, Generator
+from multiprocessing.synchronize import Event
 from pathlib import Path
 from threading import Thread
 from time import monotonic, sleep
@@ -27,8 +29,12 @@ except ImportError:  # pragma: no cover
 skip_non_linux = pytest.mark.skipif(sys.platform in ("darwin", "win32"), reason="Flaky on Windows and MacOS")
 
 
-def run(sockets: list[socket.socket] | None, _shutdown_event: object | None = None) -> None:
+def run(sockets: list[socket.socket] | None) -> None:
     pass  # pragma: no cover
+
+
+def create_shutdown_event() -> Event:
+    return multiprocessing.get_context("spawn").Event()
 
 
 def sleep_touch(*paths: Path):
@@ -63,8 +69,10 @@ class TestBaseReload:
     def _setup_reloader(self, config: Config) -> BaseReload:
         config.reload_delay = 0  # save time
 
-        reloader = self.reloader_class(config, target=run, sockets=[])
+        shutdown_event = create_shutdown_event()
+        reloader = self.reloader_class(config, target=run, sockets=[], shutdown_event=shutdown_event)
 
+        assert reloader.shutdown_event is shutdown_event
         assert config.should_reload
         reloader.startup()
         return reloader
@@ -320,7 +328,7 @@ def test_should_watch_cwd(mocker: MockerFixture, reload_directory_structure: Pat
     mock_watch = mocker.patch("uvicorn.supervisors.watchfilesreload.watch")
 
     config = Config(app="tests.test_config:asgi_app", reload=True, reload_dirs=[])
-    WatchFilesReload(config, target=run, sockets=[])
+    WatchFilesReload(config, target=run, sockets=[], shutdown_event=create_shutdown_event())
     mock_watch.assert_called_once()
     assert mock_watch.call_args[0] == (Path.cwd(),)
 
@@ -335,7 +343,7 @@ def test_should_watch_multiple_dirs(mocker: MockerFixture, reload_directory_stru
         reload=True,
         reload_dirs=[str(app_dir), str(app_first_dir)],
     )
-    WatchFilesReload(config, target=run, sockets=[])
+    WatchFilesReload(config, target=run, sockets=[], shutdown_event=create_shutdown_event())
     mock_watch.assert_called_once()
     assert set(mock_watch.call_args[0]) == {
         app_dir,
@@ -380,7 +388,7 @@ def test_base_reloader_run(tmp_path: Path):
                 raise StopIteration()
 
     config = Config(app="tests.test_config:asgi_app", reload=True)
-    reloader = CustomReload(config, target=run, sockets=[])
+    reloader = CustomReload(config, target=run, sockets=[], shutdown_event=create_shutdown_event())
     reloader.run()
 
     assert calls == ["startup", "restart", "shutdown"]
@@ -388,7 +396,7 @@ def test_base_reloader_run(tmp_path: Path):
 
 def test_base_reloader_should_exit(tmp_path: Path):
     config = Config(app="tests.test_config:asgi_app", reload=True)
-    reloader = BaseReload(config, target=run, sockets=[])
+    reloader = BaseReload(config, target=run, sockets=[], shutdown_event=create_shutdown_event())
     assert not reloader.should_exit.is_set()
     reloader.pause()
 
@@ -473,7 +481,7 @@ async def app(scope, receive, send):
 def test_base_reloader_closes_sockets_on_shutdown():
     sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     config = Config(app="tests.test_config:asgi_app", reload=True)
-    reloader = BaseReload(config, target=run, sockets=[sock])
+    reloader = BaseReload(config, target=run, sockets=[sock], shutdown_event=create_shutdown_event())
     reloader.startup()
     assert sock.fileno() != -1
     reloader.shutdown()
