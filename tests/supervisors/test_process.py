@@ -3,6 +3,8 @@ from __future__ import annotations
 import asyncio
 import threading
 import time
+from collections.abc import Iterator
+from contextlib import contextmanager
 from socket import socket
 
 from uvicorn import Config
@@ -16,6 +18,16 @@ async def app(scope: Scope, receive: ASGIReceiveCallable, send: ASGISendCallable
 
 def sleeping_target(sockets: list[socket] | None) -> None:
     time.sleep(0.5)
+
+
+@contextmanager
+def managed_process(process: Process) -> Iterator[Process]:
+    process.start()
+    try:
+        yield process
+    finally:
+        process.kill()
+        process.join()
 
 
 async def slow_startup_app(scope: Scope, receive: ASGIReceiveCallable, send: ASGISendCallable) -> None:
@@ -33,11 +45,11 @@ async def slow_startup_app(scope: Scope, receive: ASGIReceiveCallable, send: ASG
 
 def test_process_ping_pong() -> None:
     process = Process(Config(app=app), sockets=[])
-    process.start()
-    assert process.wait_until_ready(5)
-    assert process.ping()
-    process.terminate()
-    process.join()
+    with managed_process(process):
+        assert process.wait_until_ready(5)
+        assert process.ping()
+        process.terminate()
+        process.join()
 
 
 def test_process_ping_pong_timeout() -> None:
@@ -57,25 +69,24 @@ def test_process_ping_broken_pipe() -> None:
 
 def test_process_exits_when_control_pipe_closes() -> None:
     process = Process(Config(app=app), sockets=[])
-    process.start()
-    assert process.wait_until_ready(5)
+    with managed_process(process):
+        assert process.wait_until_ready(5)
 
-    process.parent_conn.close()
-    process.join()
+        process.parent_conn.close()
+        process.join()
 
-    assert process.exitcode == 0
+        assert process.exitcode == 0
 
 
 def test_process_ready() -> None:
     process = Process(Config(app=slow_startup_app), sockets=[])
-    process.start()
+    with managed_process(process):
+        assert process.ping()
+        assert not process.is_ready()
+        assert process.wait_until_ready(5)
 
-    assert process.ping()
-    assert not process.is_ready()
-    assert process.wait_until_ready(5)
-
-    process.terminate()
-    process.join()
+        process.terminate()
+        process.join()
 
 
 def test_wait_until_ready_bails_on_shutdown_or_dead_worker() -> None:
@@ -92,9 +103,8 @@ def test_wait_until_ready_bails_on_shutdown_or_dead_worker() -> None:
 
 def test_wait_until_ready_times_out() -> None:
     process = Process(Config(app=app), sockets=[], target=sleeping_target)
-    process.start()
+    with managed_process(process):
+        assert process.wait_until_ready(timeout=0.1) is False
 
-    assert process.wait_until_ready(timeout=0.1) is False
-
-    process.join()
-    assert process.exitcode == 0
+        process.join()
+        assert process.exitcode == 0
