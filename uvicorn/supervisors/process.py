@@ -97,15 +97,17 @@ class Process:
 
     def wait_until_ready(self, timeout: float, should_exit: threading.Event | None = None) -> bool:
         deadline = time.monotonic() + timeout
-        while time.monotonic() < deadline:
+        while True:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                return False
             if should_exit is not None and should_exit.is_set():
                 return False
             if not self.process.is_alive():
                 return False
-            if self.is_ready(timeout=1):
+            if self.is_ready(timeout=min(1, remaining)):
                 return True
-            time.sleep(0.1)
-        return False
+            time.sleep(min(0.1, max(0, deadline - time.monotonic())))
 
     def start(self) -> None:
         self.process.start()

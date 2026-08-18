@@ -104,7 +104,9 @@ def test_wait_until_ready_bails_on_shutdown_or_dead_worker() -> None:
 def test_wait_until_ready_times_out() -> None:
     process = Process(Config(app=app), sockets=[], target=sleeping_target)
     with managed_process(process):
+        started = time.monotonic()
         assert process.wait_until_ready(timeout=0.1) is False
+        assert time.monotonic() - started < 0.3
 
         process.join()
         assert process.exitcode == 0
