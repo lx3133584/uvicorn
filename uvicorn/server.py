@@ -22,6 +22,8 @@ from uvicorn._compat import asyncio_run
 from uvicorn.config import STARTUP_FAILURE, Config
 
 if TYPE_CHECKING:
+    from multiprocessing.synchronize import Event
+
     from uvicorn.protocols.http.h11_impl import H11Protocol
     from uvicorn.protocols.http.httptools_impl import HttpToolsProtocol
     from uvicorn.protocols.http.zttp_impl import ZttpProtocol
@@ -66,6 +68,7 @@ class Server:
         self.last_notified = 0.0
 
         self._captured_signals: list[int] = []
+        self._shutdown_event: Event | None = None
 
     @functools.cached_property
     def limit_max_requests(self) -> int | None:
@@ -73,7 +76,12 @@ class Server:
             return None
         return self.config.limit_max_requests + random.randint(0, self.config.limit_max_requests_jitter)
 
-    def run(self, sockets: list[socket.socket] | None = None) -> None:
+    def run(
+        self,
+        sockets: list[socket.socket] | None = None,
+        _shutdown_event: Event | None = None,
+    ) -> None:
+        self._shutdown_event = _shutdown_event
         return asyncio_run(self.serve(sockets=sockets), loop_factory=self.config.get_loop_factory())
 
     async def serve(self, sockets: list[socket.socket] | None = None) -> None:
@@ -259,7 +267,7 @@ class Server:
                     await self.config.callback_notify()
 
         # Determine if we should exit.
-        if self.should_exit:
+        if self.should_exit or (self._shutdown_event is not None and self._shutdown_event.is_set()):
             return True
 
         max_requests = self.limit_max_requests
