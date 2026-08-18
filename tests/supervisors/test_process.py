@@ -73,10 +73,17 @@ def test_process_exits_when_control_pipe_closes() -> None:
         assert process.wait_until_ready(5)
 
         process.parent_conn.close()
-        process.terminate()
-        process.join()
+        process.join(5)
 
         assert process.exitcode == 0
+
+
+def test_process_terminate_broken_pipe() -> None:
+    process = Process(Config(app=app), sockets=[])
+    with managed_process(process):
+        assert process.wait_until_ready(5)
+        process.parent_conn.close()
+        process.terminate()
 
 
 def test_process_ready() -> None:

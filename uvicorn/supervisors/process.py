@@ -135,10 +135,11 @@ class Process:
         self.process.kill()
         self._close_parent_conn()
 
-    def join(self) -> None:
+    def join(self, timeout: float | None = None) -> None:
         logger.info(f"Waiting for child process [{self.process.pid}]")
-        self.process.join()
-        self._close_parent_conn()
+        self.process.join(timeout)
+        if not self.process.is_alive():
+            self._close_parent_conn()
 
     @property
     def pid(self) -> int | None:
