@@ -475,7 +475,11 @@ async def app(scope, receive, send):
                 stderr=subprocess.DEVNULL,
                 check=False,
             )
-            process.wait(timeout=5)
+            try:
+                process.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                process.kill()
+                process.wait()
 
 
 def test_base_reloader_closes_sockets_on_shutdown():

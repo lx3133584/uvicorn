@@ -16,7 +16,6 @@ from uvicorn._subprocess import get_subprocess
 from uvicorn.config import Config
 
 if TYPE_CHECKING:
-    from multiprocessing.process import BaseProcess
     from multiprocessing.synchronize import Event
 
 HANDLED_SIGNALS = (
@@ -87,12 +86,8 @@ class BaseReload:
         for sig in HANDLED_SIGNALS:
             signal.signal(sig, self.signal_handler)
 
-        self.process = self._start_process()
-
-    def _start_process(self) -> BaseProcess:
-        process = get_subprocess(config=self.config, target=self.target, sockets=self.sockets)
-        process.start()
-        return process
+        self.process = get_subprocess(config=self.config, target=self.target, sockets=self.sockets)
+        self.process.start()
 
     def restart(self) -> None:
         if sys.platform == "win32":  # pragma: py-not-win32
@@ -103,7 +98,8 @@ class BaseReload:
 
         if sys.platform == "win32":  # pragma: py-not-win32
             self.shutdown_event.clear()
-        self.process = self._start_process()
+        self.process = get_subprocess(config=self.config, target=self.target, sockets=self.sockets)
+        self.process.start()
 
     def shutdown(self) -> None:
         if sys.platform == "win32":
