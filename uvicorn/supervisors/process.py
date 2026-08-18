@@ -114,15 +114,16 @@ class Process:
         self.child_conn.close()
 
     def terminate(self) -> None:
-        if self.process.exitcode is None:
-            try:
-                if self.target is None:
-                    self.parent_conn.send(SHUTDOWN)
-                else:
-                    self.process.terminate()
-            except (OSError, EOFError):
-                pass
-            logger.info(f"Terminated child process [{self.process.pid}]")
+        if self.process.exitcode is not None or self.process.pid is None:
+            return
+        try:
+            if self.target is None:
+                self.parent_conn.send(SHUTDOWN)
+            else:
+                self.process.terminate()
+        except (OSError, EOFError):
+            return
+        logger.info(f"Terminated child process [{self.process.pid}]")
 
     def _close_parent_conn(self) -> None:
         with self._close_lock:

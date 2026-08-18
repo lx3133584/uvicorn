@@ -73,6 +73,7 @@ def test_process_exits_when_control_pipe_closes() -> None:
         assert process.wait_until_ready(5)
 
         process.parent_conn.close()
+        process.terminate()
         process.join()
 
         assert process.exitcode == 0
