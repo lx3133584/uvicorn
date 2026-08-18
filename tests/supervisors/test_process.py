@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import asyncio
 import threading
+import time
+from socket import socket
 
 from uvicorn import Config
 from uvicorn._types import ASGIReceiveCallable, ASGISendCallable, Scope
@@ -10,6 +12,10 @@ from uvicorn.supervisors.process import Process
 
 async def app(scope: Scope, receive: ASGIReceiveCallable, send: ASGISendCallable) -> None:
     pass  # pragma: no cover
+
+
+def sleeping_target(sockets: list[socket] | None) -> None:
+    time.sleep(0.5)
 
 
 async def slow_startup_app(scope: Scope, receive: ASGIReceiveCallable, send: ASGISendCallable) -> None:
@@ -82,3 +88,13 @@ def test_wait_until_ready_bails_on_shutdown_or_dead_worker() -> None:
 
     process.parent_conn.close()
     process.child_conn.close()
+
+
+def test_wait_until_ready_times_out() -> None:
+    process = Process(Config(app=app), sockets=[], target=sleeping_target)
+    process.start()
+
+    assert process.wait_until_ready(timeout=0.1) is False
+
+    process.join()
+    assert process.exitcode == 0

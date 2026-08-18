@@ -44,7 +44,7 @@ def _run(
     child_conn: Connection,
 ) -> None:
     parent_conn.close()
-    if target is not None:  # pragma: full coverage - exercised only in spawned reload test processes
+    if target is not None:
         target(sockets)
         return
 
