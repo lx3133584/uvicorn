@@ -198,7 +198,7 @@ class Server:
             listeners = server.sockets
             self.servers = [server]
 
-        if config.h3_protocol_class is not None:
+        if config.h3_protocol_class is not None:  # pragma: no-zttp-h3
             if sockets is not None or config.fd is not None or config.uds is not None:
                 logger.warning("HTTP/3 is not supported with pre-bound sockets, file descriptors, or Unix sockets.")
             else:
@@ -213,7 +213,7 @@ class Server:
 
         self.started = True
 
-    async def _serve_http3(self, loop: asyncio.AbstractEventLoop, port: int) -> None:
+    async def _serve_http3(self, loop: asyncio.AbstractEventLoop, port: int) -> None:  # pragma: no-zttp-h3
         config = self.config
 
         def create_h3_protocol() -> asyncio.DatagramProtocol:

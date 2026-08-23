@@ -148,7 +148,7 @@ def _load_h3_credentials(
     certfile: str | os.PathLike[str],
     keyfile: str | os.PathLike[str] | None,
     password: str | None,
-) -> zttp.TlsCredentials:
+) -> zttp.TlsCredentials:  # pragma: no-zttp-h3
     """Convert the PEM certificate/key into the DER-plus-raw-scalar pair zttp wants.
 
     zttp's from-scratch QUIC/TLS stack signs the handshake with a raw SECP256R1
@@ -534,21 +534,22 @@ class Config:
             else encoded_headers
         )
 
+        self.h3_protocol_class: type[asyncio.DatagramProtocol] | None
         if self.http3 is True:
-            self.h3_protocol_class: type[asyncio.DatagramProtocol] | None = import_from_string(HTTP3_PROTOCOL)
+            self.h3_protocol_class = import_from_string(HTTP3_PROTOCOL)  # pragma: no-zttp-h3
         elif isinstance(self.http3, str):
-            self.h3_protocol_class = import_from_string(self.http3)
+            self.h3_protocol_class = import_from_string(self.http3)  # pragma: no-zttp-h3
         elif self.http3 is False:
             self.h3_protocol_class = None
         else:
-            self.h3_protocol_class = self.http3
+            self.h3_protocol_class = self.http3  # pragma: no-zttp-h3
 
         # HTTP/3 rides QUIC, which mandates TLS 1.3. zttp wants a DER certificate
         # and the raw private scalar, not the PEM files uvicorn is configured with,
         # so convert them here. Without a certificate zttp falls back to an
         # ephemeral identity (fine for local testing, not for real clients).
         self.h3_credentials = None
-        if self.h3_protocol_class is not None:
+        if self.h3_protocol_class is not None:  # pragma: no-zttp-h3
             if self.ssl_certfile is not None:
                 self.h3_credentials = _load_h3_credentials(
                     self.ssl_certfile, self.ssl_keyfile, self.ssl_keyfile_password
