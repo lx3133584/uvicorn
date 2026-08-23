@@ -550,14 +550,14 @@ class Config:
         # ephemeral identity (fine for local testing, not for real clients).
         self.h3_credentials = None
         if self.h3_protocol_class is not None:  # pragma: no-zttp-h3
+            if self.ssl_context_factory is not None:
+                raise RuntimeError(
+                    "HTTP/3 cannot use `ssl_context_factory`; pass PEM credentials without "
+                    "`ssl_context_factory` or disable HTTP/3."
+                )
             if self.ssl_certfile is not None:
                 self.h3_credentials = _load_h3_credentials(
                     self.ssl_certfile, self.ssl_keyfile, self.ssl_keyfile_password
-                )
-            elif self.ssl_context_factory is not None:
-                raise RuntimeError(
-                    "HTTP/3 cannot derive QUIC credentials from `ssl_context_factory`; "
-                    "pass `ssl_certfile` and `ssl_keyfile` or disable HTTP/3."
                 )
 
         if isinstance(self.ws, str):

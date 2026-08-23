@@ -75,7 +75,7 @@ class Server:
         self.should_exit = False
         self.force_exit = False
         self.last_notified = 0.0
-        self.h3_transport: asyncio.DatagramTransport | None = None
+        self.h3_transports: list[asyncio.DatagramTransport] = []
 
         self._captured_signals: list[int] = []
 
@@ -84,6 +84,10 @@ class Server:
         if self.config.limit_max_requests is None:
             return None
         return self.config.limit_max_requests + random.randint(0, self.config.limit_max_requests_jitter)
+
+    @property
+    def h3_transport(self) -> asyncio.DatagramTransport | None:
+        return self.h3_transports[0] if self.h3_transports else None
 
     def run(self, sockets: list[socket.socket] | None = None) -> None:
         return asyncio_run(self.serve(sockets=sockets), loop_factory=self.config.get_loop_factory())
@@ -202,7 +206,9 @@ class Server:
             if sockets is not None or config.fd is not None or config.uds is not None:
                 logger.warning("HTTP/3 is not supported with pre-bound sockets, file descriptors, or Unix sockets.")
             else:
-                await self._serve_http3(loop, listeners[0].getsockname()[1])
+                for listener in listeners:
+                    host, port = listener.getsockname()[:2]
+                    await self._serve_http3(loop, str(host), int(port))
 
         if sockets is None:
             self._log_started_message(listeners)
@@ -213,7 +219,9 @@ class Server:
 
         self.started = True
 
-    async def _serve_http3(self, loop: asyncio.AbstractEventLoop, port: int) -> None:  # pragma: no-zttp-h3
+    async def _serve_http3(  # pragma: no-zttp-h3
+        self, loop: asyncio.AbstractEventLoop, host: str, port: int
+    ) -> None:
         config = self.config
 
         def create_h3_protocol() -> asyncio.DatagramProtocol:
@@ -224,14 +232,13 @@ class Server:
                 app_state=self.lifespan.state,
             )
 
-        host = "0.0.0.0" if config.host is None else config.host
         try:
             transport, _protocol = await loop.create_datagram_endpoint(create_h3_protocol, local_addr=(host, port))
         except OSError as exc:  # pragma: no cover - mirrors the TCP bind-failure path above
             logger.error(exc)
             await self.lifespan.shutdown()
             sys.exit(STARTUP_FAILURE)
-        self.h3_transport = transport
+        self.h3_transports.append(transport)
         logger.info("HTTP/3 (QUIC) available on udp://%s:%d", host, port)
 
     def _log_started_message(self, listeners: Sequence[socket.SocketType]) -> None:

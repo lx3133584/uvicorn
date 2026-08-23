@@ -7,7 +7,7 @@ import sys
 import warnings
 from collections import Counter
 from collections.abc import Callable, Generator
-from typing import Any
+from typing import Any, TypeAlias
 from urllib.parse import unquote
 
 import zttp
@@ -59,15 +59,17 @@ MAX_QUIC_CONNECTIONS = 16_384
 # stream is reset once its buffered body crosses the ceiling.
 MAX_REQUEST_BODY = 4 * 1024 * 1024
 
+DatagramAddress: TypeAlias = tuple[str, int] | tuple[str, int, int, int]
+
 
 def _now(loop: asyncio.AbstractEventLoop) -> int:
     return int(loop.time() * MICROSECONDS)
 
 
-def _peer_key(addr: tuple[str, int]) -> bytes:
+def _peer_key(addr: DatagramAddress) -> bytes:
     # zttp's opaque path-validation key for a UDP peer. Kept 1:1 with the address so
     # `data_to_send_with_addresses` can map an outgoing datagram back to a socket addr.
-    return f"{addr[0]}\x00{addr[1]}".encode()
+    return "\x00".join(str(part) for part in addr).encode()
 
 
 class ZttpH3Protocol(asyncio.DatagramProtocol):
@@ -137,13 +139,12 @@ class ZttpH3Protocol(asyncio.DatagramProtocol):
             state.close()
         self.connections.discard(self)
 
-    def datagram_received(self, data: bytes, addr: tuple[str, int] | tuple[str, int, int, int]) -> None:
-        client = (str(addr[0]), int(addr[1]))
-        state = self._route(data, client)
+    def datagram_received(self, data: bytes, addr: DatagramAddress) -> None:
+        state = self._route(data, addr)
         if state is not None:
-            state.receive(data, _now(self.loop), client)
+            state.receive(data, _now(self.loop), addr)
 
-    def _route(self, data: bytes, addr: tuple[str, int]) -> QuicConnectionState | None:
+    def _route(self, data: bytes, addr: DatagramAddress) -> QuicConnectionState | None:
         """Find the connection a datagram belongs to by its destination connection
         id, opening a new one only for a fresh Initial. A stray or malformed datagram
         routes to nothing and is dropped without allocating any state."""
@@ -214,15 +215,16 @@ class ZttpH3Protocol(asyncio.DatagramProtocol):
 class QuicConnectionState:
     """One QUIC/HTTP-3 connection: a zttp `H3Connection` plus its request cycles."""
 
-    def __init__(self, endpoint: ZttpH3Protocol, cid: bytes, addr: tuple[str, int]) -> None:
+    def __init__(self, endpoint: ZttpH3Protocol, cid: bytes, addr: DatagramAddress) -> None:
         self.endpoint = endpoint
         self.cid = cid  # the destination connection id this connection is routed by
         self.addr = addr
+        self.client = (str(addr[0]), int(addr[1]))
         self.loop = endpoint.loop
         self.logger = endpoint.logger
         # Map each path-validation key back to the socket address to send it to, so
         # `data_to_send_with_addresses` can address a migrated peer correctly.
-        self.addr_by_key: dict[bytes, tuple[str, int]] = {}
+        self.addr_by_key: dict[bytes, DatagramAddress] = {}
 
         if endpoint.credentials is None:
             self.conn: zttp.H3Connection = zttp.Connection(zttp.SERVER, protocol=zttp.HTTP3, alpn=b"h3")
@@ -233,11 +235,12 @@ class QuicConnectionState:
         self.shutdown_requested = False
         self.cycles: dict[int, RequestResponseCycle] = {}
 
-    def receive(self, data: bytes, now: int, addr: tuple[str, int]) -> None:
+    def receive(self, data: bytes, now: int, addr: DatagramAddress) -> None:
         # Routing is by connection id, so the peer's address may have changed
         # (migration); tell zttp the datagram's origin for path validation and note
         # it for the return path.
         self.addr = addr
+        self.client = (str(addr[0]), int(addr[1]))
         key = _peer_key(addr)
         self.addr_by_key[key] = addr
         try:
@@ -326,7 +329,7 @@ class QuicConnectionState:
             "asgi": {"version": self.endpoint.asgi_version, "spec_version": "2.3"},
             "http_version": "3",
             "server": self.endpoint.server,
-            "client": self.addr,
+            "client": self.client,
             "scheme": "https",
             "method": event.method.decode("ascii"),
             "root_path": self.root_path,

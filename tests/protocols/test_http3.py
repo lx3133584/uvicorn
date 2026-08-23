@@ -46,14 +46,16 @@ class MockDatagramTransport:
     def __init__(self, sockname: DatagramAddress = SERVER_ADDR) -> None:
         self.sockname = sockname
         self.outbox: list[bytes] = []
+        self.sent_addresses: list[DatagramAddress | None] = []
         self.closed = False
 
     def get_extra_info(self, key: str) -> object | None:
         return {"sockname": self.sockname}.get(key)
 
-    def sendto(self, data: bytes, addr: object = None) -> None:
+    def sendto(self, data: bytes, addr: DatagramAddress | None = None) -> None:
         assert not self.closed
         self.outbox.append(data)
+        self.sent_addresses.append(addr)
 
     def close(self) -> None:
         self.closed = True
@@ -248,12 +250,14 @@ async def test_http3_ipv6_scope_addresses() -> None:
     )
     transport = MockDatagramTransport(("::1", 443, 0, 0))
     protocol.connection_made(transport)  # type: ignore[arg-type]
-    harness = H3Harness(protocol, transport, ("::2", 55555, 0, 0))
+    client_addr: DatagramAddress = ("fe80::1", 55555, 0, 3)
+    harness = H3Harness(protocol, transport, client_addr)
     await harness.pump()
     harness.send_request()
     await harness.pump()
     assert seen["server"] == ("::1", 443)
-    assert seen["client"] == ("::2", 55555)
+    assert seen["client"] == ("fe80::1", 55555)
+    assert client_addr in transport.sent_addresses
     teardown(protocol)
 
 
@@ -784,12 +788,13 @@ def test_http3_config_accepts_protocol_class() -> None:
 async def test_http3_server_binds_udp_to_resolved_tcp_port() -> None:
     from tests.utils import run_server
 
-    config = Config(app=echo_app(), host="127.0.0.1", port=0, http3=True, log_level="warning")
+    config = Config(app=echo_app(), host="localhost", port=0, http3=True, log_level="warning")
     async with run_server(config) as server:
         assert server.h3_transport is not None
         assert server.servers[0].sockets is not None
-        tcp_port = server.servers[0].sockets[0].getsockname()[1]
-        assert server.h3_transport.get_extra_info("sockname")[1] == tcp_port
+        tcp_addresses = {sock.getsockname()[:2] for sock in server.servers[0].sockets}
+        udp_addresses = {transport.get_extra_info("sockname")[:2] for transport in server.h3_transports}
+        assert udp_addresses == tcp_addresses
 
 
 async def test_http3_skips_prebound_sockets(caplog: pytest.LogCaptureFixture) -> None:
@@ -835,7 +840,23 @@ def test_http3_rejects_ssl_context_without_pem_credentials() -> None:
         return ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
 
     config = Config(app=echo_app(), http3=True, ssl_context_factory=ssl_context_factory)
-    with pytest.raises(RuntimeError, match="cannot derive QUIC credentials"):
+    with pytest.raises(RuntimeError, match="cannot use `ssl_context_factory`"):
+        config.load()
+
+
+def test_http3_rejects_ssl_context_with_pem_credentials(tmp_path) -> None:
+    def ssl_context_factory(config, default_factory):
+        return ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+
+    cert_path, key_path = _p256_pem(tmp_path)
+    config = Config(
+        app=echo_app(),
+        http3=True,
+        ssl_certfile=cert_path,
+        ssl_keyfile=key_path,
+        ssl_context_factory=ssl_context_factory,
+    )
+    with pytest.raises(RuntimeError, match="cannot use `ssl_context_factory`"):
         config.load()
 
 
