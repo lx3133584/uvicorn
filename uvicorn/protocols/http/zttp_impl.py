@@ -4,13 +4,11 @@ import asyncio
 import contextvars
 import logging
 import sys
-import warnings
-from collections.abc import Callable, Generator
+from collections.abc import Callable
 from typing import Any, Literal
 from urllib.parse import unquote
 
 import zttp
-from zttp import Event
 
 from uvicorn._types import (
     ASGI3Application,
@@ -26,15 +24,6 @@ from uvicorn.logging import TRACE_LOG_LEVEL
 from uvicorn.protocols.http.flow_control import CLOSE_HEADER, HIGH_WATER_LIMIT, FlowControl, service_unavailable
 from uvicorn.protocols.utils import get_client_addr, get_local_addr, get_path_with_query_string, get_remote_addr, is_ssl
 from uvicorn.server import ServerState
-
-HTTP2_PREFACE = b"PRI * HTTP/2.0\r\n\r\nSM\r\n\r\n"
-
-warnings.warn(
-    "The 'zttp' HTTP/1.1 protocol is experimental. I'd really appreciate if you try it out and report back! "
-    "See the docs at https://zttp.marcelotryle.com/.",
-    UserWarning,
-    stacklevel=2,
-)
 
 
 class ZttpProtocol(asyncio.Protocol):
@@ -56,7 +45,6 @@ class ZttpProtocol(asyncio.Protocol):
         self.access_log = self.access_logger.hasHandlers()
         self.conn = zttp.Connection(zttp.SERVER)
         self.ws_protocol_class = config.ws_protocol_class
-        self.h2_protocol_class = config.h2_protocol_class
         self.root_path = config.root_path
         self.asgi_version = config.asgi_version
         self.limit_concurrency = config.limit_concurrency
@@ -83,11 +71,6 @@ class ZttpProtocol(asyncio.Protocol):
         self.headers: list[tuple[bytes, bytes]] = None  # type: ignore[assignment]
         self.cycle: RequestResponseCycle = None  # type: ignore[assignment]
 
-        # HTTP/2 prior-knowledge detection state, active until the first bytes
-        # of a cleartext connection rule the HTTP/2 preface out.
-        self._h2_sniff = False
-        self._h2_buffer = b""
-
     # Protocol interface
     def connection_made(  # type: ignore[override]
         self, transport: asyncio.Transport
@@ -99,15 +82,6 @@ class ZttpProtocol(asyncio.Protocol):
         self.server = get_local_addr(transport)
         self.client = get_remote_addr(transport)
         self.scheme = "https" if is_ssl(transport) else "http"
-
-        if self.h2_protocol_class is not None:  # pragma: no-zttp-h2
-            if self.scheme == "https":
-                ssl_object = transport.get_extra_info("ssl_object")
-                if ssl_object is not None and ssl_object.selected_alpn_protocol() == "h2":
-                    self._upgrade_to_h2(transport)
-                    return
-            else:
-                self._h2_sniff = True
 
         if self.logger.level <= TRACE_LOG_LEVEL:
             prefix = "%s:%d - " % self.client if self.client else ""
@@ -144,11 +118,12 @@ class ZttpProtocol(asyncio.Protocol):
         return True
 
     def _unsupported_upgrade_warning(self) -> None:
-        msg = "Unsupported upgrade request."
-        self.logger.warning(msg)
+        self.logger.warning("Unsupported upgrade request.")
         if not self._should_upgrade_to_ws():
-            msg = "No supported WebSocket library detected. Please use \"pip install 'uvicorn[standard]'\", or install 'websockets' or 'wsproto' manually."  # noqa: E501
-            self.logger.warning(msg)
+            self.logger.warning(
+                "No supported WebSocket library detected. "
+                "Please use \"pip install 'uvicorn[standard]'\", or install 'websockets' or 'wsproto' manually."
+            )
 
     def _should_upgrade(self) -> bool:
         upgrade = self.conn.upgrade()
@@ -160,125 +135,100 @@ class ZttpProtocol(asyncio.Protocol):
             self._unsupported_upgrade_warning()
         return False
 
-    def _upgrade_to_h2(self, transport: asyncio.Transport, initial_data: bytes = b"") -> None:  # pragma: no-zttp-h2
-        assert self.h2_protocol_class is not None
-        self.connections.discard(self)
-        protocol = self.h2_protocol_class(  # type: ignore[call-arg]
-            config=self.config,
-            server_state=self.server_state,
-            app_state=self.app_state,
-            _loop=self.loop,
-        )
-        transport.set_protocol(protocol)
-        protocol.connection_made(transport)
-        if initial_data:
-            protocol.data_received(initial_data)
-
     def data_received(self, data: bytes) -> None:
         self._unset_keepalive_if_required()
-
-        if self._h2_sniff:  # pragma: no-zttp-h2
-            data = self._h2_buffer + data
-            if len(data) < len(HTTP2_PREFACE) and HTTP2_PREFACE.startswith(data):
-                self._h2_buffer = data
-                return
-            self._h2_sniff = False
-            self._h2_buffer = b""
-            if data.startswith(HTTP2_PREFACE):
-                self._upgrade_to_h2(self.transport, initial_data=data)
-                return
-
-        self.conn.receive_data(data)
-        self.handle_events()
-
-    def events(self) -> Generator[Event]:
-        """Yield every complete event currently available."""
-        while True:
-            event = self.conn.next_event()
-            if event is zttp.NEED_DATA:
-                return
-            yield event
-
-    def handle_events(self) -> None:
         try:
-            for event in self.events():
-                if isinstance(event, zttp.Request):
-                    self.headers = [(key.lower(), value) for key, value in event.headers]
-                    path = unquote(event.path.decode("ascii"))
-                    full_path = self.root_path + path
-                    full_raw_path = self.root_path.encode("ascii") + event.path
-                    self.scope = {
-                        "type": "http",
-                        "asgi": {"version": self.asgi_version, "spec_version": "2.3"},
-                        "http_version": event.http_version.decode("ascii"),
-                        "server": self.server,
-                        "client": self.client,
-                        "scheme": self.scheme,  # type: ignore[typeddict-item]
-                        "method": event.method.decode("ascii"),
-                        "root_path": self.root_path,
-                        "path": full_path,
-                        "raw_path": full_raw_path,
-                        "query_string": event.query,
-                        "headers": self.headers,
-                        "state": self.app_state.copy(),
-                    }
-                    if self._should_upgrade():
-                        self.handle_websocket_upgrade(event)
-                        return
+            self.handle_events(self.conn.receive_event(data))
+        except zttp.RemoteProtocolError:
+            self.handle_remote_protocol_error()
 
-                    # Handle 503 responses when 'limit_concurrency' is exceeded.
-                    if self.limit_concurrency is not None and (
-                        len(self.connections) >= self.limit_concurrency or len(self.tasks) >= self.limit_concurrency
-                    ):
-                        app = service_unavailable
-                        message = "Exceeded concurrency limit."
-                        self.logger.warning(message)
-                    else:
-                        app = self.app
+    def handle_events(self, event: zttp.Event) -> None:
+        while event is not zttp.NEED_DATA:
+            if isinstance(event, zttp.Request):
+                assert isinstance(event.headers, zttp.HeaderBlock)
+                self.headers = event.headers.to_list(lowercase_names=True)
+                path = event.path.decode("ascii")
+                if "%" in path:
+                    path = unquote(path)
+                full_path = self.root_path + path
+                full_raw_path = self.root_path.encode("ascii") + event.path
+                self.scope = {
+                    "type": "http",
+                    "asgi": {"version": self.asgi_version, "spec_version": "2.3"},
+                    "http_version": event.http_version.decode("ascii"),
+                    "server": self.server,
+                    "client": self.client,
+                    "scheme": self.scheme,  # type: ignore[typeddict-item]
+                    "method": event.method.decode("ascii"),
+                    "root_path": self.root_path,
+                    "path": full_path,
+                    "raw_path": full_raw_path,
+                    "query_string": event.query,
+                    "headers": self.headers,
+                    "state": self.app_state.copy(),
+                }
+                if self._should_upgrade():
+                    self.handle_websocket_upgrade(event)
+                    return
 
-                    self._unset_keepalive_if_required()
+                # Handle 503 responses when 'limit_concurrency' is exceeded.
+                if self.limit_concurrency is not None and (
+                    len(self.connections) >= self.limit_concurrency or len(self.tasks) >= self.limit_concurrency
+                ):
+                    app = service_unavailable
+                    message = "Exceeded concurrency limit."
+                    self.logger.warning(message)
+                else:
+                    app = self.app
 
-                    self.cycle = RequestResponseCycle(
-                        scope=self.scope,
-                        conn=self.conn,
-                        transport=self.transport,
-                        flow=self.flow,
-                        logger=self.logger,
-                        access_logger=self.access_logger,
-                        access_log=self.access_log,
-                        default_headers=self.server_state.default_headers,
-                        message_event=asyncio.Event(),
-                        expect_100_continue=event.expect_continue,
-                        keep_alive=not self.conn.should_close(),
-                        on_response=self.on_response_complete,
-                    )
-                    if self.config.reset_contextvars:
-                        if sys.version_info >= (3, 11):  # pragma: py-lt-311
-                            task = self.loop.create_task(self.cycle.run_asgi(app), context=contextvars.Context())
-                        else:  # pragma: py-gte-311
-                            task = contextvars.Context().run(self.loop.create_task, self.cycle.run_asgi(app))
-                    else:
-                        task = self.loop.create_task(self.cycle.run_asgi(app))
-                    task.add_done_callback(self.tasks.discard)
-                    self.tasks.add(task)
+                self._unset_keepalive_if_required()
 
-                elif isinstance(event, zttp.Data):
-                    if self.cycle is None or self.cycle.response_complete:
-                        continue  # pragma: no cover
+                self.cycle = RequestResponseCycle(
+                    scope=self.scope,
+                    conn=self.conn,
+                    transport=self.transport,
+                    flow=self.flow,
+                    logger=self.logger,
+                    access_logger=self.access_logger,
+                    access_log=self.access_log,
+                    default_headers=self.server_state.default_headers,
+                    message_event=asyncio.Event(),
+                    expect_100_continue=event.expect_continue,
+                    on_response=self.on_response_complete,
+                )
+                if event.end_stream:
+                    self.cycle.more_body = False
+                    self.cycle.message_event.set()
+                if self.config.reset_contextvars:
+                    if sys.version_info >= (3, 11):  # pragma: py-lt-311
+                        task = self.loop.create_task(self.cycle.run_asgi(app), context=contextvars.Context())
+                    else:  # pragma: py-gte-311
+                        task = contextvars.Context().run(self.loop.create_task, self.cycle.run_asgi(app))
+                else:
+                    task = self.loop.create_task(self.cycle.run_asgi(app))
+                task.add_done_callback(self.tasks.discard)
+                self.tasks.add(task)
+
+            elif isinstance(event, zttp.Data):
+                if self.cycle is not None and not self.cycle.response_complete:
                     self.cycle.body += event.data
                     if len(self.cycle.body) > HIGH_WATER_LIMIT:
                         self.flow.pause_reading()
                     self.cycle.message_event.set()
 
-                elif isinstance(event, zttp.EndOfMessage):
-                    if self.cycle is None or self.cycle.response_complete:
-                        continue  # pragma: no cover
+            elif isinstance(event, zttp.EndOfMessage):
+                if self.cycle is not None:
                     self.cycle.more_body = False
                     self.cycle.message_event.set()
-        except zttp.RemoteProtocolError:
-            msg = "Invalid HTTP request received."
-            self.logger.warning(msg)
-            self.send_400_response(msg)
+                    if self.cycle.response_complete:
+                        self.conn.start_next_cycle()
+
+            event = self.conn.next_event()
+
+    def handle_remote_protocol_error(self) -> None:
+        msg = "Invalid HTTP request received."
+        self.logger.warning(msg)
+        self.send_400_response(msg)
 
     def handle_websocket_upgrade(self, event: zttp.Request) -> None:
         if self.logger.level <= TRACE_LOG_LEVEL:  # pragma: no cover
@@ -326,10 +276,15 @@ class ZttpProtocol(asyncio.Protocol):
         # Unpause data reads if needed.
         self.flow.resume_reading()
 
-        # Reset the parser for the next request on a keep-alive connection,
-        # then unblock any events that arrived while we were responding.
-        self.conn.start_next_cycle()
-        self.handle_events()
+        # Do not reset the parser until the complete request body has arrived.
+        # An application may respond before consuming it; any remaining body
+        # still belongs to the current request and must be discarded as such.
+        if self.cycle is not None and not self.cycle.more_body:
+            self.conn.start_next_cycle()
+            try:
+                self.handle_events(self.conn.next_event())
+            except zttp.RemoteProtocolError:  # pragma: no cover
+                self.handle_remote_protocol_error()
 
     def shutdown(self) -> None:
         """
@@ -374,7 +329,6 @@ class RequestResponseCycle:
         default_headers: list[tuple[bytes, bytes]],
         message_event: asyncio.Event,
         expect_100_continue: bool,
-        keep_alive: bool,
         on_response: Callable[..., None],
     ) -> None:
         self.scope = scope
@@ -390,7 +344,7 @@ class RequestResponseCycle:
 
         # Connection state
         self.disconnected = False
-        self.keep_alive = keep_alive
+        self.keep_alive = True
         self.waiting_for_100_continue = expect_100_continue
 
         # Request state
@@ -473,20 +427,30 @@ class RequestResponseCycle:
                 headers = headers + [CLOSE_HEADER]
 
             bodyless = self.scope["method"] == "HEAD" or status in (204, 304) or status < 200
+
+            # RFC 9112 §6.1 forbids Transfer-Encoding on 1xx and 204 responses, and
+            # zttp refuses to serialize one there, so drop it instead of erroring.
+            # HEAD and 304 may keep it: it describes the body a GET would return.
+            if status < 200 or status == 204:
+                headers = [(name, value) for name, value in headers if name.lower() != b"transfer-encoding"]
+
             has_content_length = False
+            has_transfer_encoding = False
             for name, value in headers:
                 name = name.lower()
                 if name == b"content-length":
                     has_content_length = True
                     self.expected_content_length = int(value.decode())
-                elif name == b"transfer-encoding" and value.lower() == b"chunked":
+                elif name == b"transfer-encoding":
+                    # zttp only accepts a sole, final `chunked` coding - anything
+                    # else raises, like h11 - and it frames the body itself, so
+                    # there is no Content-Length accounting to do here.
+                    has_transfer_encoding = True
                     self.chunked_encoding = True
-                elif name == b"connection" and value.lower() == b"close":
-                    self.keep_alive = False
 
             # A response carrying both Content-Length and Transfer-Encoding is
             # a framing conflict that zttp rejects, so drop the Content-Length.
-            if self.chunked_encoding and has_content_length:
+            if has_transfer_encoding and has_content_length:
                 headers = [(name, value) for name, value in headers if name.lower() != b"content-length"]
                 has_content_length = False
                 self.expected_content_length = 0
@@ -494,7 +458,7 @@ class RequestResponseCycle:
             # zttp refuses to frame the body unless the response declares
             # Content-Length or Transfer-Encoding, so add chunked encoding
             # ourselves when the application provides neither.
-            if not bodyless and not self.chunked_encoding and not has_content_length:
+            if not bodyless and not has_transfer_encoding and not has_content_length:
                 self.chunked_encoding = True
                 headers = headers + [(b"transfer-encoding", b"chunked")]
 
@@ -550,7 +514,9 @@ class RequestResponseCycle:
             raise RuntimeError(f"Unexpected ASGI message '{message['type']}' sent, after response already completed.")
 
         if self.response_complete:
-            if not self.keep_alive:
+            # `should_close()` covers both directions: the request's `Connection: close`
+            # or HTTP/1.0 default, and a `close` the response we just wrote declared.
+            if not self.keep_alive or self.conn.should_close():
                 self.transport.close()
             self.on_response()
 

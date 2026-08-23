@@ -4,9 +4,9 @@ import asyncio
 import contextvars
 import logging
 import sys
-import warnings
 from collections.abc import Callable, Generator
-from typing import Any, Literal
+from typing import Any, ClassVar, Literal
+from urllib.parse import unquote
 
 import zttp
 from zttp import Event
@@ -26,13 +26,6 @@ from uvicorn.protocols.http.flow_control import HIGH_WATER_LIMIT, FlowControl, s
 from uvicorn.protocols.utils import get_client_addr, get_local_addr, get_path_with_query_string, get_remote_addr, is_ssl
 from uvicorn.server import ServerState
 
-warnings.warn(
-    "Uvicorn's HTTP/2 support is experimental. I'd really appreciate if you try it out and report back! "
-    "See the docs at https://uvicorn.dev/concepts/http2/.",
-    UserWarning,
-    stacklevel=2,
-)
-
 # RFC 9113 section 8.2.2: connection-specific headers MUST NOT appear in
 # HTTP/2 messages. zttp rejects them with LocalProtocolError, and an ASGI app
 # or middleware tuned for HTTP/1.1 may still emit them, so strip them on the
@@ -41,6 +34,8 @@ FORBIDDEN_HEADERS = frozenset({b"connection", b"keep-alive", b"proxy-connection"
 
 
 class ZttpH2Protocol(asyncio.Protocol):
+    alpn_protocols: ClassVar[list[str]] = ["h2"]
+
     def __init__(
         self,
         config: Config,
@@ -95,6 +90,9 @@ class ZttpH2Protocol(asyncio.Protocol):
         self.client = get_remote_addr(transport)
         self.scheme = "https" if is_ssl(transport) else "http"
 
+        self.conn.initiate_connection()
+        self.flush()
+
         if self.logger.level <= TRACE_LOG_LEVEL:
             prefix = "%s:%d - " % self.client if self.client else ""
             self.logger.log(TRACE_LOG_LEVEL, "%sHTTP/2 connection made", prefix)
@@ -133,6 +131,7 @@ class ZttpH2Protocol(asyncio.Protocol):
         except zttp.RemoteProtocolError as exc:
             msg = "Invalid HTTP/2 frame received: %s"
             self.logger.warning(msg, exc)
+            self.flush()
             self.transport.close()
             return
 
@@ -183,16 +182,21 @@ class ZttpH2Protocol(asyncio.Protocol):
                 cycle.message_event.set()
             elif isinstance(event, zttp.RstStream):
                 self.handle_rst_stream(event)
-            elif isinstance(event, zttp.Goaway):
+            elif isinstance(event, zttp.GoAway):
                 self.shutdown_requested = True
                 if not self.cycles:
-                    self.transport.close()
+                    self._close_connection()
             # Settings, Ping and WindowUpdate need no action here: zttp tracks
             # the send windows internally, and `flush` writes whatever bytes
             # the new credit released.
 
     def handle_request(self, event: zttp.Request) -> None:
-        path = event.path.decode("ascii")
+        headers = (
+            event.headers.to_list(lowercase_names=True)
+            if isinstance(event.headers, zttp.HeaderBlock)
+            else [(name.lower(), value) for name, value in event.headers]
+        )
+        path = unquote(event.path.decode("ascii"))
         full_path = self.root_path + path
         full_raw_path = self.root_path.encode("ascii") + event.path
         scope: HTTPScope = {
@@ -207,7 +211,7 @@ class ZttpH2Protocol(asyncio.Protocol):
             "path": full_path,
             "raw_path": full_raw_path,
             "query_string": event.query,
-            "headers": event.headers,
+            "headers": headers,
             "state": self.app_state.copy(),
         }
 
@@ -285,11 +289,19 @@ class ZttpH2Protocol(asyncio.Protocol):
 
         if not self.cycles:
             if self.shutdown_requested:
-                self.transport.close()
+                self._close_connection()
                 return
             self.timeout_keep_alive_task = self.loop.call_later(
                 self.timeout_keep_alive, self.timeout_keep_alive_handler
             )
+
+    def _close_connection(self) -> None:
+        """Send GOAWAY and close the transport."""
+        if self.transport.is_closing():
+            return
+        self.conn.close()
+        self.flush()
+        self.transport.close()
 
     def shutdown(self) -> None:
         """
@@ -300,7 +312,7 @@ class ZttpH2Protocol(asyncio.Protocol):
         """
         self.shutdown_requested = True
         if not self.cycles:
-            self.transport.close()
+            self._close_connection()
 
     def pause_writing(self) -> None:
         """
@@ -319,8 +331,7 @@ class ZttpH2Protocol(asyncio.Protocol):
         Called on a keep-alive connection if no new data is received after a short
         delay.
         """
-        if not self.transport.is_closing():
-            self.transport.close()
+        self._close_connection()
 
 
 class RequestResponseCycle:
@@ -377,12 +388,12 @@ class RequestResponseCycle:
             if not self.response_started:
                 await self.send_500_response()
             else:
-                self.transport.close()
+                self.abort_stream()
         else:
             if result is not None:
                 msg = "ASGI callable should return None, but returned '%s'."
                 self.logger.error(msg, result)
-                self.transport.close()
+                self.abort_stream()
             elif not self.response_started and not self.disconnected:
                 msg = "ASGI callable returned without starting response."
                 self.logger.error(msg)
@@ -390,10 +401,18 @@ class RequestResponseCycle:
             elif not self.response_complete and not self.disconnected:
                 msg = "ASGI callable returned without completing response."
                 self.logger.error(msg)
-                self.transport.close()
+                self.abort_stream()
         finally:
             self.on_response(self.stream.stream_id)
             self.on_response = lambda stream_id: None
+
+    def abort_stream(self) -> None:
+        """Reset only this stream so sibling streams on the connection survive."""
+        if self.transport.is_closing():
+            return
+        self.stream.reset()
+        self.transport.write(self.conn.data_to_send())
+        self.disconnected = True
 
     async def send_500_response(self) -> None:
         response_start_event: HTTPResponseStartEvent = {

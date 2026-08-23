@@ -57,6 +57,7 @@ nav:
       - HTTP/2: concepts/http2.md
       - HTTP/3: concepts/http3.md
       - Logging: concepts/logging.md
+      - HTTP Protocols: concepts/http-protocols.md
       - WebSockets: concepts/websockets.md
       - Event Loop: concepts/event-loop.md
   - Deployment:
@@ -94,7 +95,6 @@ markdown_extensions:
   - pymdownx.details
   - pymdownx.inlinehilite
   - pymdownx.snippets
-  - pymdownx.superfences
   - pymdownx.tabbed:
       alternate_style: true
   - pymdownx.emoji:

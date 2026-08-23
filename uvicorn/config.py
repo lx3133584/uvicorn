@@ -14,8 +14,7 @@ from configparser import RawConfigParser
 from pathlib import Path
 from typing import IO, Any, Literal
 
-import click
-
+from uvicorn._ansi import style
 from uvicorn._compat import iscoroutinefunction
 from uvicorn._types import ASGIApplication
 from uvicorn.importer import ImportFromStringError, import_from_string
@@ -25,7 +24,18 @@ from uvicorn.middleware.message_logger import MessageLoggerMiddleware
 from uvicorn.middleware.proxy_headers import ProxyHeadersMiddleware
 from uvicorn.middleware.wsgi import WSGIMiddleware
 
-HTTPProtocolType = Literal["auto", "h11", "httptools", "zttp"]
+
+class UvicornDeprecationWarning(UserWarning):
+    """A custom deprecation warning for Uvicorn.
+
+    Unlike the built-in DeprecationWarning, this inherits from UserWarning to ensure it is visible by default, helping
+    users discover deprecated features without needing to enable warnings explicitly.
+
+    Reference: https://sethmlarson.dev/deprecations-via-warnings-dont-work-for-python-libraries
+    """
+
+
+HTTPProtocolType = Literal["auto", "h11", "httptools", "zttp", "zttp1", "zttp2"]
 WSProtocolType = Literal["auto", "none", "websockets", "websockets-sansio", "wsproto"]
 LifespanType = Literal["auto", "on", "off"]
 LoopFactoryType = Literal["none", "auto", "asyncio", "uvloop"]
@@ -43,9 +53,10 @@ HTTP_PROTOCOLS: dict[str, str] = {
     "auto": "uvicorn.protocols.http.auto:AutoHTTPProtocol",
     "h11": "uvicorn.protocols.http.h11_impl:H11Protocol",
     "httptools": "uvicorn.protocols.http.httptools_impl:HttpToolsProtocol",
-    "zttp": "uvicorn.protocols.http.zttp_impl:ZttpProtocol",
+    "zttp": "uvicorn.protocols.http.auto_zttp_impl:AutoZttpProtocol",
+    "zttp1": "uvicorn.protocols.http.zttp_impl:ZttpProtocol",
+    "zttp2": "uvicorn.protocols.http.zttp_h2_impl:ZttpH2Protocol",
 }
-HTTP2_PROTOCOL = "uvicorn.protocols.http.zttp_h2_impl:ZttpH2Protocol"
 HTTP3_PROTOCOL = "uvicorn.protocols.http.zttp_h3_impl:ZttpH3Protocol"
 WS_PROTOCOLS: dict[str, str | None] = {
     "auto": "uvicorn.protocols.websockets.auto:AutoWebSocketsProtocol",
@@ -68,6 +79,8 @@ LOOP_FACTORIES: dict[str, str | None] = {
 INTERFACES: list[InterfaceType] = ["auto", "asgi3", "asgi2", "wsgi"]
 
 SSL_PROTOCOL_VERSION: int = ssl.PROTOCOL_TLS_SERVER
+
+STARTUP_FAILURE = 3
 
 LOGGING_CONFIG: dict[str, Any] = {
     "version": 1,
@@ -123,7 +136,7 @@ def create_ssl_context(
         ctx.load_verify_locations(ca_certs)
     if ciphers:
         ctx.set_ciphers(ciphers)
-    if alpn_protocols:
+    if alpn_protocols:  # pragma: no-zttp-h2
         ctx.set_alpn_protocols(alpn_protocols)
     return ctx
 
@@ -224,7 +237,6 @@ class Config:
         fd: int | None = None,
         loop: LoopFactoryType | str = "auto",
         http: type[asyncio.Protocol] | HTTPProtocolType | str = "auto",
-        http2: bool | type[asyncio.Protocol] | str = False,
         http3: bool | type[asyncio.DatagramProtocol] | str = False,
         ws: type[asyncio.Protocol] | WSProtocolType | str = "auto",
         ws_max_size: int = 16 * 1024 * 1024,
@@ -279,7 +291,6 @@ class Config:
         self.fd = fd
         self.loop = loop
         self.http = http
-        self.http2 = http2
         self.http3 = http3
         self.ws = ws
         self.ws_max_size = ws_max_size
@@ -458,12 +469,18 @@ class Config:
             return import_from_string(self.app)
         except ImportFromStringError as exc:
             logger.error("Error loading ASGI app. %s" % exc)
-            sys.exit(1)
+            sys.exit(STARTUP_FAILURE)
 
     def load(self) -> None:
         assert not self.loaded
 
-        alpn_protocols = ["h2", "http/1.1"] if self.http2 else None
+        if isinstance(self.http, str):
+            http_protocol_class = import_from_string(HTTP_PROTOCOLS.get(self.http, self.http))
+            self.http_protocol_class: type[asyncio.Protocol] = http_protocol_class
+        else:
+            self.http_protocol_class = self.http
+
+        alpn_protocols: list[str] | None = getattr(self.http_protocol_class, "alpn_protocols", None)
 
         if self.ssl_context_factory is not None:
 
@@ -511,21 +528,6 @@ class Config:
             else encoded_headers
         )
 
-        if isinstance(self.http, str):
-            http_protocol_class = import_from_string(HTTP_PROTOCOLS.get(self.http, self.http))
-            self.http_protocol_class: type[asyncio.Protocol] = http_protocol_class
-        else:
-            self.http_protocol_class = self.http
-
-        if self.http2 is True:
-            self.h2_protocol_class: type[asyncio.Protocol] | None = import_from_string(HTTP2_PROTOCOL)
-        elif isinstance(self.http2, str):
-            self.h2_protocol_class = import_from_string(self.http2)
-        elif self.http2 is False:
-            self.h2_protocol_class = None
-        else:
-            self.h2_protocol_class = self.http2
-
         if self.http3 is True:
             self.h3_protocol_class: type[asyncio.DatagramProtocol] | None = import_from_string(HTTP3_PROTOCOL)
         elif isinstance(self.http3, str):
@@ -558,7 +560,7 @@ class Config:
         except TypeError as exc:
             if self.factory:
                 logger.error("Error loading ASGI app factory: %s", exc)
-                sys.exit(1)
+                sys.exit(STARTUP_FAILURE)
         else:
             if not self.factory:
                 logger.warning(
@@ -603,7 +605,7 @@ class Config:
                 return import_from_string(self.loop)
             except ImportFromStringError as exc:
                 logger.error("Error loading custom loop setup function. %s" % exc)
-                sys.exit(1)
+                sys.exit(STARTUP_FAILURE)
         if loop_factory is None:
             return None
         return loop_factory(use_subprocess=self.use_subprocess)
@@ -619,17 +621,17 @@ class Config:
                 os.chmod(self.uds, uds_perms)
             except OSError as exc:  # pragma: full coverage
                 logger.error(exc)
-                sys.exit(1)
+                sys.exit(STARTUP_FAILURE)
 
             message = "Uvicorn running on unix socket %s (Press CTRL+C to quit)"
             sock_name_format = "%s"
-            color_message = "Uvicorn running on " + click.style(sock_name_format, bold=True) + " (Press CTRL+C to quit)"
+            color_message = "Uvicorn running on " + style(sock_name_format, bold=True) + " (Press CTRL+C to quit)"
             logger_args = [self.uds]
         elif self.fd is not None:  # pragma: py-win32
             sock = socket.fromfd(self.fd, socket.AF_UNIX, socket.SOCK_STREAM)
             message = "Uvicorn running on socket %s (Press CTRL+C to quit)"
             fd_name_format = "%s"
-            color_message = "Uvicorn running on " + click.style(fd_name_format, bold=True) + " (Press CTRL+C to quit)"
+            color_message = "Uvicorn running on " + style(fd_name_format, bold=True) + " (Press CTRL+C to quit)"
             logger_args = [sock.getsockname()]
         else:
             family = socket.AF_INET
@@ -646,10 +648,10 @@ class Config:
                 sock.bind((self.host, self.port))
             except OSError as exc:  # pragma: full coverage
                 logger.error(exc)
-                sys.exit(1)
+                sys.exit(STARTUP_FAILURE)
 
             message = f"Uvicorn running on {addr_format} (Press CTRL+C to quit)"
-            color_message = "Uvicorn running on " + click.style(addr_format, bold=True) + " (Press CTRL+C to quit)"
+            color_message = "Uvicorn running on " + style(addr_format, bold=True) + " (Press CTRL+C to quit)"
             protocol_name = "https" if self.is_ssl else "http"
             logger_args = [protocol_name, self.host, sock.getsockname()[1]]
         logger.info(message, *logger_args, extra={"color_message": color_message})

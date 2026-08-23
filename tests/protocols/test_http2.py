@@ -1,13 +1,15 @@
 from __future__ import annotations
 
 import asyncio
-import logging
+import ssl
 from collections.abc import Callable
-from typing import Any
+from typing import Any, ClassVar
 
+import httpx2
 import pytest
 
 from tests.response import Response
+from tests.utils import run_server
 from uvicorn._types import ASGIReceiveCallable, ASGISendCallable, Scope
 from uvicorn.config import Config
 from uvicorn.lifespan.off import LifespanOff
@@ -18,7 +20,9 @@ from uvicorn.server import ServerState
 try:
     import zttp
 
+    from uvicorn.protocols.http.auto_zttp_impl import AutoZttpProtocol
     from uvicorn.protocols.http.zttp_h2_impl import ZttpH2Protocol
+    from uvicorn.protocols.http.zttp_impl import ZttpProtocol
 
     skip_if_no_zttp_h2 = pytest.mark.skipif(
         not hasattr(zttp, "HTTP2"), reason="zttp with HTTP/2 support is not installed"
@@ -157,7 +161,7 @@ def get_connected_protocol(
 ) -> MockProtocol:
     loop = MockLoop()
     transport = MockTransport(sslcontext=True)
-    config = Config(app=app, http2=True, **kwargs)
+    config = Config(app=app, http="zttp2", **kwargs)
     lifespan = lifespan or LifespanOff(config)
     server_state = ServerState()
     protocol = ZttpH2Protocol(config=config, server_state=server_state, app_state=lifespan.state, _loop=loop)  # type: ignore[arg-type]
@@ -206,7 +210,8 @@ class H2Client:
         responses: dict[int, tuple[int, list[tuple[bytes, bytes]], bytes, bool]] = {}
         for event in self.events(data):
             if isinstance(event, zttp.Response):
-                responses[event.stream_id] = (event.status_code, event.headers, b"", False)
+                headers = event.headers.to_list() if isinstance(event.headers, zttp.HeaderBlock) else event.headers
+                responses[event.stream_id] = (event.status_code, headers, b"", False)
             elif isinstance(event, zttp.Data):
                 status, headers, body, ended = responses[event.stream_id]
                 responses[event.stream_id] = (status, headers, body + event.data, ended)
@@ -223,6 +228,8 @@ async def test_get_request():
     app = Response("Hello, world", media_type="text/plain")
     protocol = get_connected_protocol(app)
     client = H2Client()
+
+    assert protocol.transport.buffer[3] == 0x04  # server sends SETTINGS first
 
     client.request(b"GET", b"/")
     protocol.data_received(client.data_to_send())
@@ -271,7 +278,7 @@ async def test_request_scope():
     protocol = get_connected_protocol(app, root_path="/api")
     client = H2Client()
 
-    client.request(b"GET", b"/path?a=1&b=2")
+    client.request(b"GET", b"/path%2Fitem?a=1&b=2")
     protocol.data_received(client.data_to_send())
     await protocol.loop.run_one()
 
@@ -281,8 +288,8 @@ async def test_request_scope():
     assert received_scope["scheme"] == "https"
     assert received_scope["method"] == "GET"
     assert received_scope["root_path"] == "/api"
-    assert received_scope["path"] == "/api/path"
-    assert received_scope["raw_path"] == b"/api/path"
+    assert received_scope["path"] == "/api/path/item"
+    assert received_scope["raw_path"] == b"/api/path%2Fitem"
     assert received_scope["query_string"] == b"a=1&b=2"
     assert (b"host", b"example.org") in received_scope["headers"]
 
@@ -396,9 +403,26 @@ async def test_app_returning_without_response_returns_500():
     assert body == b"Internal Server Error"
 
 
-async def test_partial_response_closes_transport():
+async def test_partial_response_resets_stream():
     async def app(scope: Scope, receive: ASGIReceiveCallable, send: ASGISendCallable):
         await send({"type": "http.response.start", "status": 200, "headers": []})
+
+    protocol = get_connected_protocol(app)
+    client = H2Client()
+
+    client.request(b"GET", b"/")
+    protocol.data_received(client.data_to_send())
+    await protocol.loop.run_one()
+
+    assert not protocol.transport.is_closing()
+    events = client.events(protocol.transport.buffer)
+    assert any(isinstance(event, zttp.RstStream) for event in events)
+
+
+async def test_partial_response_after_transport_close_is_dropped():
+    async def app(scope: Scope, receive: ASGIReceiveCallable, send: ASGISendCallable):
+        await send({"type": "http.response.start", "status": 200, "headers": []})
+        protocol.transport.close()
 
     protocol = get_connected_protocol(app)
     client = H2Client()
@@ -459,7 +483,7 @@ async def test_connection_specific_response_headers_are_stripped():
     assert (b"x-custom", b"kept") in headers
 
 
-async def test_response_shorter_than_content_length_closes_transport():
+async def test_response_shorter_than_content_length_resets_stream():
     async def app(scope: Scope, receive: ASGIReceiveCallable, send: ASGISendCallable):
         await send({"type": "http.response.start", "status": 200, "headers": [(b"content-length", b"10")]})
         await send({"type": "http.response.body", "body": b"short", "more_body": False})
@@ -471,10 +495,12 @@ async def test_response_shorter_than_content_length_closes_transport():
     protocol.data_received(client.data_to_send())
     await protocol.loop.run_one()
 
-    assert protocol.transport.is_closing()
+    assert not protocol.transport.is_closing()
+    events = client.events(protocol.transport.buffer)
+    assert any(isinstance(event, zttp.RstStream) for event in events)
 
 
-async def test_response_longer_than_content_length_closes_transport():
+async def test_response_longer_than_content_length_resets_stream():
     async def app(scope: Scope, receive: ASGIReceiveCallable, send: ASGISendCallable):
         await send({"type": "http.response.start", "status": 200, "headers": [(b"content-length", b"2")]})
         await send({"type": "http.response.body", "body": b"too long", "more_body": False})
@@ -486,7 +512,9 @@ async def test_response_longer_than_content_length_closes_transport():
     protocol.data_received(client.data_to_send())
     await protocol.loop.run_one()
 
-    assert protocol.transport.is_closing()
+    assert not protocol.transport.is_closing()
+    events = client.events(protocol.transport.buffer)
+    assert any(isinstance(event, zttp.RstStream) for event in events)
 
 
 async def test_rst_stream_disconnects_the_app():
@@ -571,6 +599,18 @@ async def test_shutdown_when_idle_closes_connection():
     protocol.data_received(client.data_to_send())
     await protocol.loop.run_one()
 
+    protocol.shutdown()
+    assert protocol.transport.is_closing()
+    events = client.events(protocol.transport.buffer)
+    assert any(isinstance(event, zttp.GoAway) for event in events)
+
+
+async def test_shutdown_twice_is_a_no_op():
+    app = Response("Hello, world", media_type="text/plain")
+    protocol = get_connected_protocol(app)
+
+    protocol.shutdown()
+    assert protocol.transport.is_closing()
     protocol.shutdown()
     assert protocol.transport.is_closing()
 
@@ -716,7 +756,7 @@ async def test_window_update_flushes_pending_response_data():
     assert ended
 
 
-async def test_app_returning_value_closes_transport():
+async def test_app_returning_value_resets_stream():
     async def app(scope: Scope, receive: ASGIReceiveCallable, send: ASGISendCallable):
         response = Response("Hello, world", media_type="text/plain")
         await response(scope, receive, send)
@@ -729,7 +769,9 @@ async def test_app_returning_value_closes_transport():
     protocol.data_received(client.data_to_send())
     await protocol.loop.run_one()
 
-    assert protocol.transport.is_closing()
+    assert not protocol.transport.is_closing()
+    events = client.events(protocol.transport.buffer)
+    assert any(isinstance(event, zttp.RstStream) for event in events)
 
 
 async def test_send_after_rst_stream_is_dropped():
@@ -767,7 +809,7 @@ async def test_response_body_before_start_returns_500():
     assert body == b"Internal Server Error"
 
 
-async def test_unexpected_message_after_start_closes_transport():
+async def test_unexpected_message_after_start_resets_stream():
     async def app(scope: Scope, receive: ASGIReceiveCallable, send: ASGISendCallable):
         await send({"type": "http.response.start", "status": 200, "headers": []})
         await send({"type": "http.response.start", "status": 200, "headers": []})
@@ -779,10 +821,12 @@ async def test_unexpected_message_after_start_closes_transport():
     protocol.data_received(client.data_to_send())
     await protocol.loop.run_one()
 
-    assert protocol.transport.is_closing()
+    assert not protocol.transport.is_closing()
+    events = client.events(protocol.transport.buffer)
+    assert any(isinstance(event, zttp.RstStream) for event in events)
 
 
-async def test_unexpected_message_after_completion_closes_transport():
+async def test_unexpected_message_after_completion_resets_stream():
     async def app(scope: Scope, receive: ASGIReceiveCallable, send: ASGISendCallable):
         response = Response("Hello, world", media_type="text/plain")
         await response(scope, receive, send)
@@ -795,7 +839,9 @@ async def test_unexpected_message_after_completion_closes_transport():
     protocol.data_received(client.data_to_send())
     await protocol.loop.run_one()
 
-    assert protocol.transport.is_closing()
+    assert not protocol.transport.is_closing()
+    events = client.events(protocol.transport.buffer)
+    assert any(isinstance(event, zttp.RstStream) for event in events)
 
 
 async def test_reset_contextvars_runs_each_stream_in_a_fresh_context():
@@ -820,153 +866,213 @@ async def test_eof_received_is_a_no_op():
 
 async def test_trace_logging(caplog: pytest.LogCaptureFixture, logging_config: dict[str, Any]):
     app = Response("Hello, world", media_type="text/plain")
-    logger = logging.getLogger("uvicorn.error")
-    logger.addHandler(caplog.handler)
-    try:
-        protocol = get_connected_protocol(app, log_level="trace", log_config=logging_config)
-        protocol.connection_lost(None)
-    finally:
-        logger.removeHandler(caplog.handler)
+    protocol = get_connected_protocol(app, log_level="trace", log_config=logging_config)
+    protocol.connection_lost(None)
 
     messages = [record.message for record in caplog.records if record.name == "uvicorn.error"]
     assert any("HTTP/2 connection made" in message for message in messages)
     assert any("HTTP/2 connection lost" in message for message in messages)
 
 
-# --- Switching from the HTTP/1.1 protocols ------------------------------------
+# --- Protocol negotiation ------------------------------------------------------
 
 
-def get_http1_protocol(
+def get_negotiator(
     app: Callable[..., Any],
-    http_protocol_cls: type[asyncio.Protocol],
     alpn_protocol: str | None = None,
     sslcontext: bool = False,
     **kwargs: Any,
-) -> MockProtocol:
+) -> tuple[AutoZttpProtocol, MockTransport, MockLoop]:
     loop = MockLoop()
     transport = MockTransport(sslcontext=sslcontext, alpn_protocol=alpn_protocol)
-    config = Config(app=app, **kwargs)
+    config = Config(app=app, http="zttp", **kwargs)
     lifespan = LifespanOff(config)
     server_state = ServerState()
-    protocol = http_protocol_cls(config=config, server_state=server_state, app_state=lifespan.state, _loop=loop)  # type: ignore[call-arg]
-    protocol.connection_made(transport)  # type: ignore[arg-type]
-    return protocol  # type: ignore[return-value]
+    negotiator = AutoZttpProtocol(config=config, server_state=server_state, app_state=lifespan.state, _loop=loop)  # type: ignore[arg-type]
+    negotiator.connection_made(transport)  # type: ignore[arg-type]
+    return negotiator, transport, loop
 
 
-async def test_alpn_h2_switches_protocol(http_protocol_cls: type[asyncio.Protocol]):
+async def test_alpn_h2_selects_http2():
     app = Response("Hello, world", media_type="text/plain")
-    protocol = get_http1_protocol(app, http_protocol_cls, alpn_protocol="h2", sslcontext=True, http2=True)
-    assert isinstance(protocol.transport.get_protocol(), ZttpH2Protocol)
+    _, transport, _ = get_negotiator(app, alpn_protocol="h2", sslcontext=True)
+    assert isinstance(transport.get_protocol(), ZttpH2Protocol)
 
 
-async def test_alpn_http11_does_not_switch_protocol(http_protocol_cls: type[asyncio.Protocol]):
+async def test_alpn_http11_selects_http1():
     app = Response("Hello, world", media_type="text/plain")
-    protocol = get_http1_protocol(app, http_protocol_cls, alpn_protocol="http/1.1", sslcontext=True, http2=True)
-    assert protocol.transport.get_protocol() is None
+    _, transport, _ = get_negotiator(app, alpn_protocol="http/1.1", sslcontext=True)
+    assert isinstance(transport.get_protocol(), ZttpProtocol)
 
 
-async def test_alpn_h2_without_http2_enabled_does_not_switch_protocol(http_protocol_cls: type[asyncio.Protocol]):
+async def test_prior_knowledge_preface_selects_http2():
     app = Response("Hello, world", media_type="text/plain")
-    protocol = get_http1_protocol(app, http_protocol_cls, alpn_protocol="h2", sslcontext=True, http2=False)
-    assert protocol.transport.get_protocol() is None
-
-
-async def test_prior_knowledge_preface_switches_protocol(http_protocol_cls: type[asyncio.Protocol]):
-    app = Response("Hello, world", media_type="text/plain")
-    protocol = get_http1_protocol(app, http_protocol_cls, http2=True)
+    negotiator, transport, _ = get_negotiator(app)
     client = H2Client()
 
     client.request(b"GET", b"/")
-    protocol.data_received(client.data_to_send())
+    negotiator.data_received(client.data_to_send())
 
-    h2_protocol = protocol.transport.get_protocol()
+    h2_protocol = transport.get_protocol()
     assert isinstance(h2_protocol, ZttpH2Protocol)
-    await h2_protocol.loop.run_one()  # type: ignore[attr-defined]
+    await h2_protocol.loop.run_one()
 
-    status, _, body, _ = client.parse_response(protocol.transport.buffer)
+    status, _, body, _ = client.parse_response(transport.buffer)
     assert status == 200
     assert body == b"Hello, world"
 
 
-async def test_prior_knowledge_preface_split_across_packets(http_protocol_cls: type[asyncio.Protocol]):
+async def test_prior_knowledge_preface_split_across_packets():
     app = Response("Hello, world", media_type="text/plain")
-    protocol = get_http1_protocol(app, http_protocol_cls, http2=True)
+    negotiator, transport, _ = get_negotiator(app)
     client = H2Client()
 
     client.request(b"GET", b"/")
     wire = client.data_to_send()
-    protocol.data_received(wire[:10])
-    assert protocol.transport.get_protocol() is None
-    protocol.data_received(wire[10:])
+    negotiator.data_received(wire[:10])
+    assert transport.get_protocol() is None
+    negotiator.data_received(wire[10:])
 
-    h2_protocol = protocol.transport.get_protocol()
+    h2_protocol = transport.get_protocol()
     assert isinstance(h2_protocol, ZttpH2Protocol)
-    await h2_protocol.loop.run_one()  # type: ignore[attr-defined]
+    await h2_protocol.loop.run_one()
 
-    status, _, body, _ = client.parse_response(protocol.transport.buffer)
+    status, _, body, _ = client.parse_response(transport.buffer)
     assert status == 200
     assert body == b"Hello, world"
 
 
-async def test_http1_request_with_http2_enabled_stays_on_http1(http_protocol_cls: type[asyncio.Protocol]):
+async def test_http1_request_selects_http1():
     app = Response("Hello, world", media_type="text/plain")
-    protocol = get_http1_protocol(app, http_protocol_cls, http2=True)
+    negotiator, transport, loop = get_negotiator(app)
 
-    protocol.data_received(b"GET / HTTP/1.1\r\nHost: example.org\r\n\r\n")
-    await protocol.loop.run_one()
+    negotiator.data_received(b"GET / HTTP/1.1\r\nHost: example.org\r\n\r\n")
+    await loop.run_one()
 
-    assert protocol.transport.get_protocol() is None
-    assert b"HTTP/1.1 200 OK" in protocol.transport.buffer
-    assert b"Hello, world" in protocol.transport.buffer
+    assert isinstance(transport.get_protocol(), ZttpProtocol)
+    assert b"HTTP/1.1 200 OK" in transport.buffer
+    assert b"Hello, world" in transport.buffer
 
 
-async def test_http2_over_tls_without_alpn_stays_on_http1(http_protocol_cls: type[asyncio.Protocol]):
+async def test_tls_without_alpn_selects_http1():
     app = Response("Hello, world", media_type="text/plain")
-    protocol = get_http1_protocol(app, http_protocol_cls, sslcontext=True, http2=True)
+    _, transport, loop = get_negotiator(app, sslcontext=True)
 
+    protocol = transport.get_protocol()
+    assert isinstance(protocol, ZttpProtocol)
     protocol.data_received(b"GET / HTTP/1.1\r\nHost: example.org\r\n\r\n")
-    await protocol.loop.run_one()
+    await loop.run_one()
 
-    assert protocol.transport.get_protocol() is None
-    assert b"HTTP/1.1 200 OK" in protocol.transport.buffer
+    assert b"HTTP/1.1 200 OK" in transport.buffer
+
+
+async def test_negotiator_times_out_silent_connection():
+    app = Response("Hello, world", media_type="text/plain")
+    negotiator, transport, loop = get_negotiator(app)
+
+    loop.run_later(with_delay=5)
+    assert transport.closed
+    negotiator.connection_lost(None)
+
+
+async def test_negotiator_shutdown_closes_connection():
+    app = Response("Hello, world", media_type="text/plain")
+    negotiator, transport, _ = get_negotiator(app)
+
+    negotiator.shutdown()
+    assert transport.closed
+    negotiator.eof_received()
+    negotiator.connection_lost(None)
 
 
 # --- Configuration -------------------------------------------------------------
 
 
-async def test_config_http2_true_loads_zttp_h2_protocol():
-    config = Config(app=Response("ok"), http2=True)
+async def test_server_installs_auto_zttp_protocol(unused_tcp_port: int):
+    app = Response("Hello, world", media_type="text/plain")
+    config = Config(app=app, http="zttp", loop="asyncio", limit_max_requests=1, port=unused_tcp_port)
+    async with run_server(config):
+        async with httpx2.AsyncClient() as client:
+            response = await client.get(f"http://127.0.0.1:{unused_tcp_port}")
+    assert response.status_code == 200
+    assert response.text == "Hello, world"
+
+
+async def test_config_http_zttp_loads_negotiator():
+    config = Config(app=Response("ok"), http="zttp")
     config.load()
-    assert config.h2_protocol_class is ZttpH2Protocol
+    assert config.http_protocol_class is AutoZttpProtocol
 
 
-async def test_config_http2_false_loads_no_h2_protocol():
-    config = Config(app=Response("ok"))
+async def test_config_http_zttp1_loads_http1_protocol():
+    config = Config(app=Response("ok"), http="zttp1")
     config.load()
-    assert config.h2_protocol_class is None
+    assert config.http_protocol_class is ZttpProtocol
 
 
-async def test_config_http2_import_string():
-    config = Config(app=Response("ok"), http2="uvicorn.protocols.http.zttp_h2_impl:ZttpH2Protocol")
+async def test_config_http_zttp2_loads_http2_protocol():
+    config = Config(app=Response("ok"), http="zttp2")
     config.load()
-    assert config.h2_protocol_class is ZttpH2Protocol
+    assert config.http_protocol_class is ZttpH2Protocol
 
 
-async def test_config_http2_protocol_class():
-    config = Config(app=Response("ok"), http2=ZttpH2Protocol)
-    config.load()
-    assert config.h2_protocol_class is ZttpH2Protocol
+class CustomH2Protocol(asyncio.Protocol):
+    alpn_protocols: ClassVar[list[str]] = ["h2", "http/1.1"]
 
 
-async def test_config_http2_offers_alpn_protocols(
+@pytest.mark.parametrize("http", ["zttp", CustomH2Protocol], ids=["zttp", "custom"])
+async def test_config_http_protocol_offers_alpn_protocols(
+    http: str | type[asyncio.Protocol],
     tls_ca_certificate_pem_path: str,
     tls_ca_certificate_private_key_path: str,
 ):
     config = Config(
         app=Response("ok"),
-        http2=True,
+        http=http,
         ssl_certfile=tls_ca_certificate_pem_path,
         ssl_keyfile=tls_ca_certificate_private_key_path,
     )
     config.load()
-    assert config.is_ssl is True
+    assert config.ssl is not None
+
+    client_context = ssl.create_default_context()
+    client_context.check_hostname = False
+    client_context.verify_mode = ssl.CERT_NONE
+    client_context.set_alpn_protocols(["h2"])
+
+    server_incoming = ssl.MemoryBIO()
+    server_outgoing = ssl.MemoryBIO()
+    client_incoming = ssl.MemoryBIO()
+    client_outgoing = ssl.MemoryBIO()
+    server = config.ssl.wrap_bio(server_incoming, server_outgoing, server_side=True)
+    client = client_context.wrap_bio(
+        client_incoming,
+        client_outgoing,
+        server_side=False,
+        server_hostname="localhost",
+    )
+
+    client_done = False
+    server_done = False
+    for _ in range(10):
+        if not client_done:
+            try:
+                client.do_handshake()
+                client_done = True
+            except ssl.SSLWantReadError:
+                pass
+        server_incoming.write(client_outgoing.read())
+
+        if not server_done:
+            try:
+                server.do_handshake()
+                server_done = True
+            except ssl.SSLWantReadError:
+                pass
+        client_incoming.write(server_outgoing.read())
+        if client_done and server_done:
+            break
+
+    assert client_done and server_done
+    assert client.selected_alpn_protocol() == "h2"
+    assert server.selected_alpn_protocol() == "h2"

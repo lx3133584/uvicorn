@@ -21,6 +21,7 @@ from uvicorn.config import (
     LOG_LEVELS,
     LOGGING_CONFIG,
     SSL_PROTOCOL_VERSION,
+    STARTUP_FAILURE,
     Config,
     HTTPProtocolType,
     InterfaceType,
@@ -39,8 +40,6 @@ INTERFACE_CHOICES = click.Choice(INTERFACES)
 def _metavar_from_type(_type: Any) -> str:
     return f"[{'|'.join(key for key in get_args(_type) if key != 'none')}]"
 
-
-STARTUP_FAILURE = 3
 
 logger = logging.getLogger("uvicorn.error")
 
@@ -131,12 +130,6 @@ def print_version(ctx: click.Context, param: click.Parameter, value: bool) -> No
     default="auto",
     help="HTTP protocol implementation.",
     show_default=True,
-)
-@click.option(
-    "--http2",
-    is_flag=True,
-    default=False,
-    help="Enable HTTP/2 support. Requires the 'zttp' package.",
 )
 @click.option(
     "--http3",
@@ -406,7 +399,6 @@ def main(
     fd: int,
     loop: LoopFactoryType | str,
     http: HTTPProtocolType | str,
-    http2: bool,
     http3: bool,
     ws: WSProtocolType | str,
     ws_max_size: int,
@@ -460,7 +452,6 @@ def main(
         fd=fd,
         loop=loop,
         http=http,
-        http2=http2,
         http3=http3,
         ws=ws,
         ws_max_size=ws_max_size,
@@ -517,7 +508,6 @@ def run(
     fd: int | None = None,
     loop: LoopFactoryType | str = "auto",
     http: type[asyncio.Protocol] | HTTPProtocolType | str = "auto",
-    http2: bool | type[asyncio.Protocol] | str = False,
     http3: bool | type[asyncio.DatagramProtocol] | str = False,
     ws: type[asyncio.Protocol] | WSProtocolType | str = "auto",
     ws_max_size: int = 16777216,
@@ -575,7 +565,6 @@ def run(
         fd=fd,
         loop=loop,
         http=http,
-        http2=http2,
         http3=http3,
         ws=ws,
         ws_max_size=ws_max_size,
@@ -621,12 +610,14 @@ def run(
         h11_max_incomplete_event_size=h11_max_incomplete_event_size,
         reset_contextvars=reset_contextvars,
     )
-    if (config.reload or config.workers > 1) and not isinstance(app, str):
-        logger = logging.getLogger("uvicorn.error")
-        logger.warning("You must pass the application as an import string to enable 'reload' or 'workers'.")
-        sys.exit(1)
+    if config.reload or config.workers > 1:
+        if not isinstance(app, str):
+            logger = logging.getLogger("uvicorn.error")
+            logger.warning("You must pass the application as an import string to enable 'reload' or 'workers'.")
+            sys.exit(STARTUP_FAILURE)
+    else:
+        config.load_app()
 
-    config.load_app()
     server = Server(config=config)
 
     try:
@@ -635,7 +626,7 @@ def run(
             ChangeReload(config, target=server.run, sockets=[sock]).run()
         elif config.workers > 1:
             sock = config.bind_socket()
-            Multiprocess(config, target=server.run, sockets=[sock]).run()
+            Multiprocess(config, sockets=[sock]).run()
         else:
             server.run()
     except KeyboardInterrupt:  # pragma: full coverage

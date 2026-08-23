@@ -92,9 +92,8 @@ Using Uvicorn with watchfiles will enable the following options (which are other
 ## Implementation
 
 * `--loop <str>` - Set the event loop implementation. The uvloop implementation provides greater performance, but is not compatible with Windows or PyPy. **Options:** *'auto', 'asyncio', 'uvloop'.* **Default:** *'auto'*.
-* `--http <str>` - Set the HTTP protocol implementation. The httptools implementation provides greater performance, but it not compatible with PyPy. **Options:** *'auto', 'h11', 'httptools'.* **Default:** *'auto'*.
-* `--http2` - Enable experimental HTTP/2 support. Requires the `zttp` package (`pip install zttp`). HTTP/2 is negotiated via ALPN over TLS (h2) and via prior knowledge on cleartext connections (h2c). See the [HTTP/2 documentation](concepts/http2.md) for details. **Default:** *False*.
-* `--http3` - Enable experimental HTTP/3 (QUIC) support on a UDP socket alongside the TCP server. Requires the `zttp` (>= 0.0.15) and `cryptography` packages, and a P-256 EC TLS certificate. See the [HTTP/3 documentation](concepts/http3.md) for details. **Default:** *False*.
+* `--http <str>` - Set the [HTTP protocol implementation](concepts/http-protocols.md). The httptools implementation provides greater performance, but is not compatible with PyPy. The zttp implementations are experimental and require the `zttp` package (`pip install zttp`): `zttp` serves both HTTP/1.1 and HTTP/2 (negotiated via ALPN over TLS, or via prior knowledge on cleartext connections), `zttp1` serves HTTP/1.1 only, and `zttp2` serves HTTP/2 only. See the [HTTP/2 documentation](concepts/http2.md) for details. **Options:** *'auto', 'h11', 'httptools', 'zttp', 'zttp1', 'zttp2'.* **Default:** *'auto'*.
+* `--http3` - Enable experimental HTTP/3 (QUIC) support on a UDP socket alongside the TCP server. Requires the `zttp` and `cryptography` packages, and a P-256 EC TLS certificate. See the [HTTP/3 documentation](concepts/http3.md) for details. **Default:** *False*.
 * `--ws <str>` - Set the WebSockets protocol implementation. Either of the `websockets` and `wsproto` packages are supported. There are two versions of `websockets` supported: `websockets` and `websockets-sansio`. Use `'none'` to ignore all websocket requests. **Options:** *'auto', 'none', 'websockets', 'websockets-sansio', 'wsproto'.* **Default:** *'auto'*.
 * `--ws-max-size <int>` - Set the WebSockets max message size, in bytes. **Default:** *16777216* (16 MB).
 * `--ws-max-queue <int>` - Set the maximum length of the WebSocket incoming message queue. Only available with the `websockets` protocol. **Default:** *32*.
@@ -144,10 +143,10 @@ For advanced TLS scenarios that the flags above don't cover (e.g., mutual TLS, c
 
 ## Resource Limits
 
-* `--limit-concurrency <int>` - Maximum number of concurrent connections or tasks to allow, before issuing HTTP 503 responses. Useful for ensuring known memory usage patterns even under over-resourced loads.
+* `--limit-concurrency <int>` - Maximum number of concurrent connections or tasks to allow, before issuing HTTP 503 responses. Useful for ensuring known memory usage patterns even under over-resourced loads. This is an application-level limit: excess requests receive an immediate 503, they are **not** queued. See [Concurrency and backlog](server-behavior.md#concurrency-and-backlog) for details and how it differs from `--backlog`.
 * `--limit-max-requests <int>` - Maximum number of requests to service before terminating the process. Useful when running together with a process manager, for preventing memory leaks from impacting long-running processes.
 * `--limit-max-requests-jitter <int>` - Maximum jitter to add to `limit-max-requests`. Each worker adds a random number in the range `[0, jitter]`, staggering restarts to avoid all workers restarting simultaneously. **Default:** *0*.
-* `--backlog <int>` - Maximum number of connections to hold in backlog. Relevant for heavy incoming traffic. **Default:** *2048*.
+* `--backlog <int>` - Maximum number of connections to hold in the TCP accept queue, passed to the socket's `listen()` call. This is an OS-level setting, independent of `--limit-concurrency`; see [Concurrency and backlog](server-behavior.md#concurrency-and-backlog). Relevant for heavy incoming traffic. **Default:** *2048*.
 
 ## Timeouts
 
