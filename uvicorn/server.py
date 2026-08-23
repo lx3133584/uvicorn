@@ -86,7 +86,7 @@ class Server:
         return self.config.limit_max_requests + random.randint(0, self.config.limit_max_requests_jitter)
 
     @property
-    def h3_transport(self) -> asyncio.DatagramTransport | None:
+    def h3_transport(self) -> asyncio.DatagramTransport | None:  # pragma: no-zttp-h3
         return self.h3_transports[0] if self.h3_transports else None
 
     def run(self, sockets: list[socket.socket] | None = None) -> None:
