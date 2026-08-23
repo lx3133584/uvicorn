@@ -198,8 +198,11 @@ class Server:
             listeners = server.sockets
             self.servers = [server]
 
-        if config.h3_protocol_class is not None and config.uds is None:
-            await self._serve_http3(loop)
+        if config.h3_protocol_class is not None:
+            if sockets is not None or config.fd is not None or config.uds is not None:
+                logger.warning("HTTP/3 is not supported with pre-bound sockets, file descriptors, or Unix sockets.")
+            else:
+                await self._serve_http3(loop, listeners[0].getsockname()[1])
 
         if sockets is None:
             self._log_started_message(listeners)
@@ -210,7 +213,7 @@ class Server:
 
         self.started = True
 
-    async def _serve_http3(self, loop: asyncio.AbstractEventLoop) -> None:
+    async def _serve_http3(self, loop: asyncio.AbstractEventLoop, port: int) -> None:
         config = self.config
 
         def create_h3_protocol() -> asyncio.DatagramProtocol:
@@ -223,15 +226,13 @@ class Server:
 
         host = "0.0.0.0" if config.host is None else config.host
         try:
-            transport, _protocol = await loop.create_datagram_endpoint(
-                create_h3_protocol, local_addr=(host, config.port)
-            )
+            transport, _protocol = await loop.create_datagram_endpoint(create_h3_protocol, local_addr=(host, port))
         except OSError as exc:  # pragma: no cover - mirrors the TCP bind-failure path above
             logger.error(exc)
             await self.lifespan.shutdown()
-            sys.exit(1)
+            sys.exit(STARTUP_FAILURE)
         self.h3_transport = transport
-        logger.info("HTTP/3 (QUIC) available on udp://%s:%d", host, config.port)
+        logger.info("HTTP/3 (QUIC) available on udp://%s:%d", host, port)
 
     def _log_started_message(self, listeners: Sequence[socket.SocketType]) -> None:
         config = self.config

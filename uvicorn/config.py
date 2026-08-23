@@ -12,7 +12,7 @@ import sys
 from collections.abc import Awaitable, Callable
 from configparser import RawConfigParser
 from pathlib import Path
-from typing import IO, Any, Literal
+from typing import IO, TYPE_CHECKING, Any, Literal
 
 from uvicorn._ansi import style
 from uvicorn._compat import iscoroutinefunction
@@ -23,6 +23,9 @@ from uvicorn.middleware.asgi2 import ASGI2Middleware
 from uvicorn.middleware.message_logger import MessageLoggerMiddleware
 from uvicorn.middleware.proxy_headers import ProxyHeadersMiddleware
 from uvicorn.middleware.wsgi import WSGIMiddleware
+
+if TYPE_CHECKING:
+    import zttp
 
 
 class UvicornDeprecationWarning(UserWarning):
@@ -145,7 +148,7 @@ def _load_h3_credentials(
     certfile: str | os.PathLike[str],
     keyfile: str | os.PathLike[str] | None,
     password: str | None,
-) -> Any:
+) -> zttp.TlsCredentials:
     """Convert the PEM certificate/key into the DER-plus-raw-scalar pair zttp wants.
 
     zttp's from-scratch QUIC/TLS stack signs the handshake with a raw SECP256R1
@@ -163,7 +166,10 @@ def _load_h3_credentials(
             "Install them with `pip install zttp cryptography`."
         ) from exc
 
-    cert = x509.load_pem_x509_certificate(Path(certfile).read_bytes())
+    certificates = x509.load_pem_x509_certificates(Path(certfile).read_bytes())
+    cert = certificates[0]
+    if len(certificates) > 1:
+        logger.warning("HTTP/3 currently sends only the leaf TLS certificate, without intermediate certificates.")
     key = load_pem_private_key(Path(keyfile or certfile).read_bytes(), password.encode() if password else None)
     if not isinstance(key, ec.EllipticCurvePrivateKey) or not isinstance(key.curve, ec.SECP256R1):
         raise RuntimeError(
@@ -542,8 +548,16 @@ class Config:
         # so convert them here. Without a certificate zttp falls back to an
         # ephemeral identity (fine for local testing, not for real clients).
         self.h3_credentials = None
-        if self.h3_protocol_class is not None and self.ssl_certfile is not None:
-            self.h3_credentials = _load_h3_credentials(self.ssl_certfile, self.ssl_keyfile, self.ssl_keyfile_password)
+        if self.h3_protocol_class is not None:
+            if self.ssl_certfile is not None:
+                self.h3_credentials = _load_h3_credentials(
+                    self.ssl_certfile, self.ssl_keyfile, self.ssl_keyfile_password
+                )
+            elif self.ssl_context_factory is not None:
+                raise RuntimeError(
+                    "HTTP/3 cannot derive QUIC credentials from `ssl_context_factory`; "
+                    "pass `ssl_certfile` and `ssl_keyfile` or disable HTTP/3."
+                )
 
         if isinstance(self.ws, str):
             ws_protocol_class = import_from_string(WS_PROTOCOLS.get(self.ws, self.ws))

@@ -3,11 +3,14 @@ from __future__ import annotations
 import asyncio
 import datetime as dt
 import logging
-from importlib.metadata import version
-from typing import Any
+import socket
+import ssl
+from typing import TypeAlias
 
 import pytest
+from typing_extensions import TypedDict, Unpack
 
+from uvicorn._types import ASGIApplication
 from uvicorn.config import Config
 from uvicorn.lifespan.off import LifespanOff
 from uvicorn.server import ServerState
@@ -17,29 +20,38 @@ try:
 
     from uvicorn.protocols.http.zttp_h3_impl import ZttpH3Protocol
 
-    _zttp_version = tuple(int(part) for part in version("zttp").split(".")[:3])
     skip_if_no_zttp_h3 = pytest.mark.skipif(
-        _zttp_version < (0, 0, 15), reason="zttp>=0.0.15 (with parse_datagram_header) is not installed"
+        not hasattr(zttp, "parse_datagram_header"), reason="zttp with HTTP/3 support is not installed"
     )
-except ModuleNotFoundError:  # pragma: no cover
-    skip_if_no_zttp_h3 = pytest.mark.skipif(True, reason="zttp is not installed")
+except (ImportError, AttributeError):  # pragma: no cover
+    skip_if_no_zttp_h3 = pytest.mark.skipif(True, reason="zttp with HTTP/3 support is not installed")
 
 pytestmark = [pytest.mark.anyio, skip_if_no_zttp_h3]
 
-SERVER_ADDR = ("127.0.0.1", 443)
-CLIENT_ADDR = ("127.0.0.1", 55555)
+DatagramAddress: TypeAlias = tuple[str, int] | tuple[str, int, int, int]
+
+
+class ProtocolConfig(TypedDict, total=False):
+    limit_concurrency: int
+    reset_contextvars: bool
+    ssl_certfile: str
+    ssl_keyfile: str
+
+
+SERVER_ADDR: DatagramAddress = ("127.0.0.1", 443)
+CLIENT_ADDR: DatagramAddress = ("127.0.0.1", 55555)
 
 
 class MockDatagramTransport:
-    def __init__(self, sockname: tuple[str, int] = SERVER_ADDR) -> None:
+    def __init__(self, sockname: DatagramAddress = SERVER_ADDR) -> None:
         self.sockname = sockname
         self.outbox: list[bytes] = []
         self.closed = False
 
-    def get_extra_info(self, key: str) -> Any:
+    def get_extra_info(self, key: str) -> object | None:
         return {"sockname": self.sockname}.get(key)
 
-    def sendto(self, data: bytes, addr: Any = None) -> None:
+    def sendto(self, data: bytes, addr: object = None) -> None:
         assert not self.closed
         self.outbox.append(data)
 
@@ -58,9 +70,15 @@ class MockDatagramTransport:
 class H3Harness:
     """Drives a zttp client against a real `ZttpH3Protocol` over in-memory datagrams."""
 
-    def __init__(self, protocol: ZttpH3Protocol, transport: MockDatagramTransport) -> None:
+    def __init__(
+        self,
+        protocol: ZttpH3Protocol,
+        transport: MockDatagramTransport,
+        client_addr: DatagramAddress = CLIENT_ADDR,
+    ) -> None:
         self.protocol = protocol
         self.transport = transport
+        self.client_addr = client_addr
         self.client = zttp.Connection(zttp.CLIENT, protocol=zttp.HTTP3, server_name=b"localhost")
         self.responses: dict[int, zttp.Response] = {}
         self.bodies: dict[int, bytes] = {}
@@ -73,7 +91,7 @@ class H3Harness:
     async def pump(self, rounds: int = 10) -> None:
         for _ in range(rounds):
             for datagram in self.client.data_to_send():
-                self.protocol.datagram_received(datagram, CLIENT_ADDR)
+                self.protocol.datagram_received(datagram, self.client_addr)
             # Let the ASGI response tasks run to completion.
             for _ in range(6):
                 await asyncio.sleep(0)
@@ -103,7 +121,9 @@ class H3Harness:
         return stream.stream_id
 
 
-def make_protocol(app: Any, **kwargs: Any) -> tuple[ZttpH3Protocol, MockDatagramTransport, ServerState]:
+def make_protocol(
+    app: ASGIApplication, **kwargs: Unpack[ProtocolConfig]
+) -> tuple[ZttpH3Protocol, MockDatagramTransport, ServerState]:
     config = Config(app=app, http3=True, **kwargs)
     lifespan = LifespanOff(config)
     server_state = ServerState()
@@ -115,7 +135,9 @@ def make_protocol(app: Any, **kwargs: Any) -> tuple[ZttpH3Protocol, MockDatagram
     return protocol, transport, server_state
 
 
-async def connected(app: Any, **kwargs: Any) -> tuple[H3Harness, ZttpH3Protocol, ServerState]:
+async def connected(
+    app: ASGIApplication, **kwargs: Unpack[ProtocolConfig]
+) -> tuple[H3Harness, ZttpH3Protocol, ServerState]:
     protocol, transport, server_state = make_protocol(app, **kwargs)
     harness = H3Harness(protocol, transport)
     await harness.pump()  # complete the QUIC handshake
@@ -186,7 +208,7 @@ async def test_http3_post_with_body_is_echoed() -> None:
 
 
 async def test_http3_scope_is_http3_and_https() -> None:
-    seen: dict[str, Any] = {}
+    seen: dict[str, object] = {}
 
     async def app(scope, receive, send):
         seen.update(scope)
@@ -198,14 +220,40 @@ async def test_http3_scope_is_http3_and_https() -> None:
         await send({"type": "http.response.body", "body": b""})
 
     harness, protocol, _ = await connected(app)
-    harness.send_request(b"GET", b"/a/b?x=1")
+    harness.send_request(b"GET", b"/a%2Fb?x=1")
     await harness.pump()
     assert seen["http_version"] == "3"
     assert seen["scheme"] == "https"
     assert seen["method"] == "GET"
     assert seen["path"] == "/a/b"
+    assert seen["raw_path"] == b"/a%2Fb"
     assert seen["query_string"] == b"x=1"
     assert seen["client"] == CLIENT_ADDR
+    teardown(protocol)
+
+
+async def test_http3_ipv6_scope_addresses() -> None:
+    seen: dict[str, object] = {}
+
+    async def app(scope, receive, send):
+        seen.update(scope)
+        await receive()
+        await send({"type": "http.response.start", "status": 204, "headers": []})
+        await send({"type": "http.response.body", "body": b""})
+
+    config = Config(app=app, http3=True)
+    lifespan = LifespanOff(config)
+    protocol = ZttpH3Protocol(
+        config=config, server_state=ServerState(), app_state=lifespan.state, _loop=asyncio.get_event_loop()
+    )
+    transport = MockDatagramTransport(("::1", 443, 0, 0))
+    protocol.connection_made(transport)  # type: ignore[arg-type]
+    harness = H3Harness(protocol, transport, ("::2", 55555, 0, 0))
+    await harness.pump()
+    harness.send_request()
+    await harness.pump()
+    assert seen["server"] == ("::1", 443)
+    assert seen["client"] == ("::2", 55555)
     teardown(protocol)
 
 
@@ -297,7 +345,7 @@ async def test_http3_access_log_is_emitted() -> None:
     teardown(protocol)
 
 
-async def test_http3_graceful_shutdown_drains_and_closes(caplog: pytest.LogCaptureFixture) -> None:
+async def test_http3_graceful_shutdown_drains_and_closes() -> None:
     harness, protocol, _ = await connected(echo_app())
     harness.send_request(b"GET", b"/")
     await harness.pump()
@@ -306,23 +354,27 @@ async def test_http3_graceful_shutdown_drains_and_closes(caplog: pytest.LogCaptu
     # No live connections remain, so the endpoint deregisters and closes its socket.
     assert protocol not in protocol.server_state.connections
     assert protocol.transport.is_closing()
+    teardown(protocol)
 
 
 async def test_http3_shutdown_refuses_new_connections() -> None:
-    protocol, transport, _ = make_protocol(echo_app())
+    protocol, _transport, _ = make_protocol(echo_app())
     protocol.shutdown()
     assert protocol.shutdown_requested
     # An Initial from a brand-new peer during shutdown is dropped, not accepted.
     protocol.datagram_received(make_initial(b"\x01\x02\x03\x04"), ("127.0.0.1", 40000))
     assert not protocol.by_cid
+    teardown(protocol)
 
 
 async def test_http3_concurrency_limit_drops_new_connections() -> None:
-    protocol, transport, _ = make_protocol(echo_app(), limit_concurrency=1)
+    protocol, _transport, _ = make_protocol(echo_app(), limit_concurrency=1)
     # Pretend one connection already exists so a fresh peer is over the limit.
     protocol.by_cid[b"existing0"] = object()  # type: ignore[assignment]
     protocol.datagram_received(make_initial(b"\x01\x02\x03\x04"), ("127.0.0.1", 40001))
     assert b"\x01\x02\x03\x04" not in protocol.by_cid
+    protocol.by_cid.clear()
+    teardown(protocol)
 
 
 async def test_http3_migration_is_routed_by_connection_id() -> None:
@@ -457,18 +509,18 @@ def _p256_pem(tmp_path) -> tuple[str, str]:
 class FakeStream:
     def __init__(self, stream_id: int = 0) -> None:
         self.stream_id = stream_id
-        self.calls: list[tuple[Any, ...]] = []
+        self.calls: list[tuple[object, ...]] = []
 
-    def send_response(self, status: int, headers: Any) -> None:
+    def send_response(self, status: int, headers: list[tuple[bytes, bytes]]) -> None:
         self.calls.append(("response", status))
 
     def send_data(self, data: bytes) -> None:
         self.calls.append(("data", data))
 
-    def end_message(self, *args: Any) -> None:
+    def end_message(self, *args: object) -> None:
         self.calls.append(("end",))
 
-    def reset(self, *args: Any) -> None:
+    def reset(self, *args: object) -> None:
         self.calls.append(("reset",))
 
 
@@ -511,14 +563,14 @@ async def test_cycle_disconnected_send_is_dropped() -> None:
 
 async def test_cycle_first_message_must_be_response_start() -> None:
     cycle, _ = make_cycle()
-    with pytest.raises(RuntimeError, match="http.response.start"):
+    with pytest.raises(RuntimeError, match=r"http\.response\.start"):
         await cycle.send({"type": "http.response.body", "body": b""})
 
 
 async def test_cycle_second_message_must_be_response_body() -> None:
     cycle, _ = make_cycle()
     await cycle.send({"type": "http.response.start", "status": 200, "headers": []})
-    with pytest.raises(RuntimeError, match="http.response.body"):
+    with pytest.raises(RuntimeError, match=r"http\.response\.body"):
         await cycle.send({"type": "http.response.start", "status": 200, "headers": []})
 
 
@@ -629,6 +681,7 @@ async def test_http3_request_during_shutdown_gets_503() -> None:
     sid = harness.send_request(b"GET", b"/")
     await harness.pump()
     assert harness.responses[sid].status_code == 503
+    teardown(protocol)
 
 
 async def test_http3_request_over_capacity_gets_503() -> None:
@@ -653,6 +706,7 @@ async def test_http3_client_close_tears_down_connection() -> None:
     for datagram in harness.client.data_to_send():
         protocol.datagram_received(datagram, CLIENT_ADDR)
     assert not protocol.by_cid
+    teardown(protocol)
 
 
 async def test_http3_close_cancels_pending_timer() -> None:
@@ -727,13 +781,27 @@ def test_http3_config_accepts_protocol_class() -> None:
     assert config.h3_protocol_class is ZttpH3Protocol
 
 
-async def test_http3_server_binds_udp_endpoint(unused_tcp_port: int) -> None:
+async def test_http3_server_binds_udp_to_resolved_tcp_port() -> None:
     from tests.utils import run_server
 
-    config = Config(app=echo_app(), host="127.0.0.1", port=unused_tcp_port, http3=True, log_level="warning")
+    config = Config(app=echo_app(), host="127.0.0.1", port=0, http3=True, log_level="warning")
     async with run_server(config) as server:
         assert server.h3_transport is not None
-        assert server.h3_transport.get_extra_info("sockname")[1] == unused_tcp_port
+        assert server.servers[0].sockets is not None
+        tcp_port = server.servers[0].sockets[0].getsockname()[1]
+        assert server.h3_transport.get_extra_info("sockname")[1] == tcp_port
+
+
+async def test_http3_skips_prebound_sockets(caplog: pytest.LogCaptureFixture) -> None:
+    from tests.utils import run_server
+
+    sock = socket.socket()
+    sock.bind(("127.0.0.1", 0))
+    sock.listen()
+    config = Config(app=echo_app(), http3=True, log_level="warning")
+    async with run_server(config, sockets=[sock]) as server:
+        assert server.h3_transport is None
+    assert "HTTP/3 is not supported with pre-bound sockets" in caplog.text
 
 
 def test_http3_disabled_by_default() -> None:
@@ -749,6 +817,26 @@ def test_http3_credentials_are_derived_from_pem(tmp_path) -> None:
     assert isinstance(config.h3_credentials, zttp.TlsCredentials)
     assert len(config.h3_credentials.private_key) == 32
     assert len(config.h3_credentials.certificate) > 32
+
+
+def test_http3_warns_when_certificate_chain_is_ignored(tmp_path, caplog: pytest.LogCaptureFixture) -> None:
+    cert_path, key_path = _p256_pem(tmp_path)
+    with open(cert_path, "rb") as cert_file:
+        certificate = cert_file.read()
+    with open(cert_path, "ab") as cert_file:
+        cert_file.write(certificate)
+    config = Config(app=echo_app(), http3=True, ssl_certfile=cert_path, ssl_keyfile=key_path)
+    config.load()
+    assert "sends only the leaf TLS certificate" in caplog.text
+
+
+def test_http3_rejects_ssl_context_without_pem_credentials() -> None:
+    def ssl_context_factory(config, default_factory):
+        return ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+
+    config = Config(app=echo_app(), http3=True, ssl_context_factory=ssl_context_factory)
+    with pytest.raises(RuntimeError, match="cannot derive QUIC credentials"):
+        config.load()
 
 
 def test_http3_rejects_non_p256_key(tmp_path) -> None:

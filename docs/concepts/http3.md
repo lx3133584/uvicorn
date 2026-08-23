@@ -87,6 +87,10 @@ The implementation is young, and several pieces are deliberately minimal:
   that migrates address mid-connection is followed correctly; but the server does not itself
   issue new connection ids, so it presents a stable id for the connection's lifetime.
 - **Only P-256 EC certificates** are accepted for the server key.
+- **Certificate chains are not sent.** Only the leaf certificate is presented. Clients must already
+  trust or cache any intermediate certificates.
+- **Pre-bound sockets are not supported.** HTTP/3 is disabled with `--workers`, `--reload`, `--fd`,
+  `--uds`, or an externally supplied socket.
 - **No `Alt-Svc` advertisement** is injected automatically - if you also serve HTTP/1.1 or HTTP/2,
   add the header yourself so browsers discover the HTTP/3 endpoint.
 - **Bounded, not fully flow-controlled.** A request whose in-memory body exceeds an internal cap

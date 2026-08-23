@@ -8,6 +8,7 @@ import warnings
 from collections import Counter
 from collections.abc import Callable, Generator
 from typing import Any
+from urllib.parse import unquote
 
 import zttp
 from zttp import Event
@@ -24,7 +25,7 @@ from uvicorn._types import (
 from uvicorn.config import Config
 from uvicorn.logging import TRACE_LOG_LEVEL
 from uvicorn.protocols.http.flow_control import service_unavailable
-from uvicorn.protocols.utils import get_client_addr, get_path_with_query_string
+from uvicorn.protocols.utils import get_client_addr, get_local_addr, get_path_with_query_string
 from uvicorn.server import ServerState
 
 warnings.warn(
@@ -123,7 +124,7 @@ class ZttpH3Protocol(asyncio.DatagramProtocol):
         self, transport: asyncio.DatagramTransport
     ) -> None:
         self.transport = transport
-        self.server = transport.get_extra_info("sockname")
+        self.server = get_local_addr(transport)
         # Register the endpoint - not each QUIC connection - so the server's
         # graceful-shutdown loop calls `shutdown()` here and waits for us to drain.
         self.connections.add(self)
@@ -136,10 +137,11 @@ class ZttpH3Protocol(asyncio.DatagramProtocol):
             state.close()
         self.connections.discard(self)
 
-    def datagram_received(self, data: bytes, addr: tuple[str, int]) -> None:
-        state = self._route(data, addr)
+    def datagram_received(self, data: bytes, addr: tuple[str, int] | tuple[str, int, int, int]) -> None:
+        client = (str(addr[0]), int(addr[1]))
+        state = self._route(data, client)
         if state is not None:
-            state.receive(data, _now(self.loop), addr)
+            state.receive(data, _now(self.loop), client)
 
     def _route(self, data: bytes, addr: tuple[str, int]) -> QuicConnectionState | None:
         """Find the connection a datagram belongs to by its destination connection
@@ -222,10 +224,10 @@ class QuicConnectionState:
         # `data_to_send_with_addresses` can address a migrated peer correctly.
         self.addr_by_key: dict[bytes, tuple[str, int]] = {}
 
-        kwargs: dict[str, Any] = {"alpn": b"h3"}
-        if endpoint.credentials is not None:
-            kwargs["credentials"] = endpoint.credentials
-        self.conn: zttp.H3Connection = zttp.Connection(zttp.SERVER, protocol=zttp.HTTP3, **kwargs)
+        if endpoint.credentials is None:
+            self.conn: zttp.H3Connection = zttp.Connection(zttp.SERVER, protocol=zttp.HTTP3, alpn=b"h3")
+        else:
+            self.conn = zttp.Connection(zttp.SERVER, protocol=zttp.HTTP3, alpn=b"h3", credentials=endpoint.credentials)
 
         self.timer: asyncio.TimerHandle | None = None
         self.shutdown_requested = False
@@ -316,7 +318,7 @@ class QuicConnectionState:
             # is nothing stream-level to do for other events here.
 
     def handle_request(self, event: zttp.Request) -> None:
-        path = event.path.decode("ascii")
+        path = unquote(event.path.decode("ascii"))
         full_path = self.root_path + path
         full_raw_path = self.root_path.encode("ascii") + event.path
         scope: HTTPScope = {
