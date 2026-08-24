@@ -163,13 +163,10 @@ def _load_h3_credentials(
     except ImportError as exc:  # pragma: no cover
         raise RuntimeError(
             "HTTP/3 support requires the 'zttp' and 'cryptography' packages. "
-            "Install them with `pip install zttp cryptography`."
+            "Install them with `pip install 'uvicorn[http3]'`."
         ) from exc
 
     certificates = x509.load_pem_x509_certificates(Path(certfile).read_bytes())
-    cert = certificates[0]
-    if len(certificates) > 1:
-        logger.warning("HTTP/3 currently sends only the leaf TLS certificate, without intermediate certificates.")
     key = load_pem_private_key(Path(keyfile or certfile).read_bytes(), password.encode() if password else None)
     if not isinstance(key, ec.EllipticCurvePrivateKey) or not isinstance(key.curve, ec.SECP256R1):
         raise RuntimeError(
@@ -177,7 +174,10 @@ def _load_h3_credentials(
             f"got {type(key).__name__}. Generate one with `openssl ecparam -name prime256v1 -genkey`."
         )
     scalar = key.private_numbers().private_value.to_bytes(32, "big")
-    return zttp.TlsCredentials(certificate=cert.public_bytes(Encoding.DER), private_key=scalar)
+    return zttp.TlsCredentials(
+        certificates=tuple(certificate.public_bytes(Encoding.DER) for certificate in certificates),
+        private_key_scalar=scalar,
+    )
 
 
 def is_dir(path: Path) -> bool:
@@ -243,7 +243,6 @@ class Config:
         fd: int | None = None,
         loop: LoopFactoryType | str = "auto",
         http: type[asyncio.Protocol] | HTTPProtocolType | str = "auto",
-        http3: bool | type[asyncio.DatagramProtocol] | str = False,
         ws: type[asyncio.Protocol] | WSProtocolType | str = "auto",
         ws_max_size: int = 16 * 1024 * 1024,
         ws_max_queue: int = 32,
@@ -289,6 +288,7 @@ class Config:
         factory: bool = False,
         h11_max_incomplete_event_size: int | None = None,
         reset_contextvars: bool = False,
+        http3: bool | type[asyncio.DatagramProtocol] | str = False,
     ):
         self.app = app
         self.host = host

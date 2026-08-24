@@ -15,7 +15,7 @@ import time
 from collections.abc import Generator, Sequence
 from email.utils import formatdate
 from types import FrameType
-from typing import TYPE_CHECKING, TypeAlias
+from typing import TYPE_CHECKING, TypeAlias, cast
 
 from uvicorn._ansi import style
 from uvicorn._compat import asyncio_run
@@ -26,7 +26,7 @@ if TYPE_CHECKING:
     from uvicorn.protocols.http.h11_impl import H11Protocol
     from uvicorn.protocols.http.httptools_impl import HttpToolsProtocol
     from uvicorn.protocols.http.zttp_h2_impl import ZttpH2Protocol
-    from uvicorn.protocols.http.zttp_h3_impl import ZttpH3Protocol
+    from uvicorn.protocols.http.zttp_h3_impl import QuicConnectionState, ZttpH3Protocol
     from uvicorn.protocols.http.zttp_impl import ZttpProtocol
     from uvicorn.protocols.websockets.websockets_impl import WebSocketProtocol
     from uvicorn.protocols.websockets.websockets_sansio_impl import WebSocketsSansIOProtocol
@@ -43,6 +43,8 @@ if TYPE_CHECKING:
         | WebSocketProtocol
         | WebSocketsSansIOProtocol
     )
+
+DatagramAddress: TypeAlias = tuple[str, int] | tuple[str, int, int, int]
 
 HANDLED_SIGNALS = (
     signal.SIGINT,  # Unix signal 2. Sent by Ctrl+C.
@@ -62,6 +64,7 @@ class ServerState:
     def __init__(self) -> None:
         self.total_requests = 0
         self.connections: set[Protocols] = set()
+        self.h3_connections: set[QuicConnectionState] = set()
         self.tasks: set[asyncio.Task[None]] = set()
         self.default_headers: list[tuple[bytes, bytes]] = []
 
@@ -207,8 +210,7 @@ class Server:
                 logger.warning("HTTP/3 is not supported with pre-bound sockets, file descriptors, or Unix sockets.")
             else:
                 for listener in listeners:
-                    host, port = listener.getsockname()[:2]
-                    await self._serve_http3(loop, str(host), int(port))
+                    await self._serve_http3(loop, cast(DatagramAddress, listener.getsockname()))
 
         if sockets is None:
             self._log_started_message(listeners)
@@ -220,7 +222,7 @@ class Server:
         self.started = True
 
     async def _serve_http3(  # pragma: no-zttp-h3
-        self, loop: asyncio.AbstractEventLoop, host: str, port: int
+        self, loop: asyncio.AbstractEventLoop, local_addr: DatagramAddress
     ) -> None:
         config = self.config
 
@@ -232,14 +234,21 @@ class Server:
                 app_state=self.lifespan.state,
             )
 
+        family = socket.AF_INET6 if len(local_addr) == 4 else socket.AF_INET
+        udp_socket = socket.socket(family, socket.SOCK_DGRAM)
+        transport: asyncio.DatagramTransport | None = None
         try:
-            transport, _protocol = await loop.create_datagram_endpoint(create_h3_protocol, local_addr=(host, port))
+            udp_socket.bind(local_addr)
+            transport, _protocol = await loop.create_datagram_endpoint(create_h3_protocol, sock=udp_socket)
         except OSError as exc:  # pragma: no cover - mirrors the TCP bind-failure path above
             logger.error(exc)
             await self.lifespan.shutdown()
             sys.exit(STARTUP_FAILURE)
+        finally:
+            if transport is None:
+                udp_socket.close()
         self.h3_transports.append(transport)
-        logger.info("HTTP/3 (QUIC) available on udp://%s:%d", host, port)
+        logger.info("HTTP/3 (QUIC) available on udp://%s:%d", local_addr[0], local_addr[1])
 
     def _log_started_message(self, listeners: Sequence[socket.SocketType]) -> None:
         config = self.config

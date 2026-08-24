@@ -19,11 +19,13 @@ connect over UDP.
 
 ## Enabling HTTP/3
 
-HTTP/3 support requires the `zttp` (>= 0.0.15) and `cryptography` packages:
+Install the HTTP/3 dependencies with the `http3` extra:
 
 ```bash
-pip install "zttp>=0.0.15" cryptography
+pip install "uvicorn[http3]"
 ```
+
+This installs `zttp` 0.0.26 or later and a compatible `cryptography` version.
 
 To enable it, use the `--http3` flag:
 
@@ -39,7 +41,9 @@ To enable it, use the `--http3` flag:
     uvicorn.run("main:app", http3=True)
     ```
 
-This binds a UDP endpoint on the configured host and port, alongside the usual TCP server.
+This binds a UDP endpoint on the configured host and port, alongside the usual TCP server. The
+endpoint uses stateless Retry before allocating a connection, routes packets by QUIC connection
+ID, and follows validated client address changes.
 
 ## TLS certificate
 
@@ -57,6 +61,9 @@ Then run Uvicorn with the certificate:
 ```bash
 uvicorn main:app --http3 --ssl-keyfile key.pem --ssl-certfile cert.pem
 ```
+
+The certificate file may contain a PEM chain. Put the leaf first, followed by each intermediate.
+Uvicorn sends the complete ordered chain and uses the leaf key for the handshake signature.
 
 If no certificate is configured, zttp falls back to an ephemeral identity. That is convenient for
 experiments with a non-verifying client, but real clients will reject it.
@@ -83,17 +90,12 @@ async def app(scope, receive, send):
 
 The implementation is young, and several pieces are deliberately minimal:
 
-- **No QUIC connection ID rotation.** Datagrams are demultiplexed by connection id, so a client
-  that migrates address mid-connection is followed correctly; but the server does not itself
-  issue new connection ids, so it presents a stable id for the connection's lifetime.
 - **Only P-256 EC certificates** are accepted for the server key.
-- **Certificate chains are not sent.** Only the leaf certificate is presented. Clients must already
-  trust or cache any intermediate certificates.
 - **Pre-bound sockets are not supported.** HTTP/3 is disabled with `--workers`, `--reload`, `--fd`,
   `--uds`, or an externally supplied socket.
 - **No `Alt-Svc` advertisement** is injected automatically - if you also serve HTTP/1.1 or HTTP/2,
   add the header yourself so browsers discover the HTTP/3 endpoint.
-- **Bounded, not fully flow-controlled.** A request whose in-memory body exceeds an internal cap
-  (~4 MiB) has its stream reset rather than being back-pressured, and the number of concurrent
-  QUIC connections is capped. Prefer HTTP/1.1 for large uploads for now.
+- **Request bodies are bounded.** QUIC receive credit follows ASGI `receive()` calls, so a sender
+  stalls while the application is not consuming data. A request that still exceeds the defensive
+  in-memory cap has its stream reset, and the number of concurrent QUIC connections is capped.
 - HTTP/3 server push and `Expect: 100-continue` are not supported.

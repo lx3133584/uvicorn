@@ -135,7 +135,7 @@ def print_version(ctx: click.Context, param: click.Parameter, value: bool) -> No
     "--http3",
     is_flag=True,
     default=False,
-    help="Enable HTTP/3 (QUIC) support on the same UDP port. Requires the 'zttp' and 'cryptography' packages.",
+    help="Enable HTTP/3 (QUIC) support on the same UDP port. Requires the 'http3' extra.",
 )
 @click.option(
     "--ws",

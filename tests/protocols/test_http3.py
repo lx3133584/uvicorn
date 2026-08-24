@@ -13,7 +13,7 @@ from typing_extensions import TypedDict, Unpack
 from uvicorn._types import ASGIApplication
 from uvicorn.config import Config
 from uvicorn.lifespan.off import LifespanOff
-from uvicorn.server import ServerState
+from uvicorn.server import Server, ServerState
 
 try:
     import zttp
@@ -21,7 +21,7 @@ try:
     from uvicorn.protocols.http.zttp_h3_impl import ZttpH3Protocol
 
     skip_if_no_zttp_h3 = pytest.mark.skipif(
-        not hasattr(zttp, "parse_datagram_header"), reason="zttp with HTTP/3 support is not installed"
+        not hasattr(zttp, "QuicEndpoint"), reason="zttp with HTTP/3 support is not installed"
     )
 except (ImportError, AttributeError):  # pragma: no cover
     skip_if_no_zttp_h3 = pytest.mark.skipif(True, reason="zttp with HTTP/3 support is not installed")
@@ -105,6 +105,7 @@ class H3Harness:
                     self.bodies.setdefault(event.stream_id, b"")
                 elif isinstance(event, zttp.Data):
                     self.bodies[event.stream_id] = self.bodies.get(event.stream_id, b"") + event.data
+                    self.client.consume_data(event.stream_id, len(event.data))
                 elif isinstance(event, zttp.EndOfMessage):
                     self.ended.add(event.stream_id)
 
@@ -153,7 +154,7 @@ def teardown(protocol: ZttpH3Protocol) -> None:
 
 def only_state(protocol: ZttpH3Protocol):
     """The endpoint's single QUIC connection state (the tests drive one client)."""
-    return next(iter(protocol.by_cid.values()))
+    return next(iter(protocol.states.values()))
 
 
 def make_initial(connection_id: bytes) -> bytes:
@@ -366,18 +367,19 @@ async def test_http3_shutdown_refuses_new_connections() -> None:
     protocol.shutdown()
     assert protocol.shutdown_requested
     # An Initial from a brand-new peer during shutdown is dropped, not accepted.
-    protocol.datagram_received(make_initial(b"\x01\x02\x03\x04"), ("127.0.0.1", 40000))
-    assert not protocol.by_cid
+    protocol.datagram_received(make_initial(b"new-peer"), ("127.0.0.1", 40000))
+    assert not protocol.states
     teardown(protocol)
 
 
-async def test_http3_concurrency_limit_drops_new_connections() -> None:
-    protocol, _transport, _ = make_protocol(echo_app(), limit_concurrency=1)
-    # Pretend one connection already exists so a fresh peer is over the limit.
-    protocol.by_cid[b"existing0"] = object()  # type: ignore[assignment]
-    protocol.datagram_received(make_initial(b"\x01\x02\x03\x04"), ("127.0.0.1", 40001))
-    assert b"\x01\x02\x03\x04" not in protocol.by_cid
-    protocol.by_cid.clear()
+async def test_http3_concurrency_limit_counts_all_listeners() -> None:
+    protocol, transport, server_state = make_protocol(echo_app(), limit_concurrency=1)
+    server_state.h3_connections.add(object())  # type: ignore[arg-type]
+    assert protocol._at_capacity()
+    harness = H3Harness(protocol, transport)
+    await harness.pump()
+    assert not protocol.states
+    server_state.h3_connections.clear()
     teardown(protocol)
 
 
@@ -410,7 +412,33 @@ async def test_http3_stray_datagram_is_dropped_without_allocating() -> None:
     protocol.datagram_received(handshake_like, CLIENT_ADDR)
     # And a truly malformed datagram that fails to parse at all.
     protocol.datagram_received(b"\xc0\x00", CLIENT_ADDR)
-    assert not protocol.by_cid
+    assert not protocol.states
+
+
+async def test_http3_undersized_initial_is_dropped_without_retry() -> None:
+    protocol, transport, _ = make_protocol(echo_app())
+    protocol.datagram_received(make_initial(b"eight-cd")[:100], CLIENT_ADDR)
+    assert not transport.outbox
+    assert not protocol.states
+    teardown(protocol)
+
+
+async def test_http3_remote_protocol_error_drops_the_address() -> None:
+    class ErrorEndpoint:
+        def receive_datagram(self, data: bytes, peer_address: bytes, now: int):
+            raise zttp.RemoteProtocolError("bad datagram")
+
+        def data_to_send(self) -> list[zttp.OutboundDatagram]:
+            return []
+
+        def next_timeout(self) -> int | None:
+            return None
+
+    protocol, _transport, _ = make_protocol(echo_app())
+    protocol.endpoint = ErrorEndpoint()  # type: ignore[assignment]
+    protocol.datagram_received(b"\x40invalid", CLIENT_ADDR)
+    assert not protocol.addr_by_key
+    teardown(protocol)
 
 
 async def test_http3_malformed_initial_tears_down_the_connection() -> None:
@@ -419,21 +447,24 @@ async def test_http3_malformed_initial_tears_down_the_connection() -> None:
     # A valid Initial header (so it routes and opens a connection) followed by a body
     # zttp cannot parse: the state is created, then discarded when the datagram is rejected.
     protocol.datagram_received(initial[:20] + b"\xff" * 40, CLIENT_ADDR)
-    assert not protocol.by_cid
+    assert not protocol.states
 
 
 async def test_http3_connection_ceiling_drops_new_peers() -> None:
     import uvicorn.protocols.http.zttp_h3_impl as impl
 
-    protocol, _, _ = make_protocol(echo_app())
+    protocol, transport, _ = make_protocol(echo_app())
     original = impl.MAX_QUIC_CONNECTIONS
     impl.MAX_QUIC_CONNECTIONS = 1
     try:
-        protocol.by_cid[b"existing0"] = object()  # type: ignore[assignment]
-        protocol.datagram_received(make_initial(b"\x01\x02\x03\x04"), ("127.0.0.1", 40100))
-        assert b"\x01\x02\x03\x04" not in protocol.by_cid
+        protocol.server_state.h3_connections.add(object())  # type: ignore[arg-type]
+        harness = H3Harness(protocol, transport)
+        await harness.pump()
+        assert not protocol.states
     finally:
+        protocol.server_state.h3_connections.clear()
         impl.MAX_QUIC_CONNECTIONS = original
+        teardown(protocol)
 
 
 async def test_http3_oversized_request_body_resets_the_stream() -> None:
@@ -553,6 +584,7 @@ def make_cycle(method: str = "GET"):
         access_log=False,
         default_headers=[],
         message_event=asyncio.Event(),
+        consume_data=lambda stream_id, length: None,
         on_response=lambda stream_id: None,
     )
     return cycle, stream
@@ -604,6 +636,17 @@ async def test_cycle_receive_after_disconnect() -> None:
     cycle, _ = make_cycle()
     cycle.disconnected = True
     assert await cycle.receive() == {"type": "http.disconnect"}
+
+
+async def test_cycle_receive_returns_http3_flow_credit() -> None:
+    cycle, _ = make_cycle()
+    consumed: list[tuple[int, int]] = []
+    cycle.consume_data = lambda stream_id, length: consumed.append((stream_id, length))
+    cycle.body.extend(b"request body")
+    cycle.more_body = False
+    cycle.message_event.set()
+    assert await cycle.receive() == {"type": "http.request", "body": b"request body", "more_body": False}
+    assert consumed == [(0, 12)]
 
 
 async def test_cycle_run_asgi_returned_non_none() -> None:
@@ -662,10 +705,9 @@ async def test_http3_uses_configured_credentials(tmp_path) -> None:
     cert_path, key_path = _p256_pem(tmp_path)
     protocol, transport, _ = make_protocol(echo_app(), ssl_certfile=cert_path, ssl_keyfile=key_path)
     assert protocol.credentials is not None
-    # A real Initial builds the per-connection state, which wires the configured
-    # credentials into the zttp server connection it constructs.
-    protocol.datagram_received(make_initial(b"\x0a\x0b\x0c\x0d"), CLIENT_ADDR)
-    assert b"\x0a\x0b\x0c\x0d" in protocol.by_cid
+    harness = H3Harness(protocol, transport)
+    await harness.pump()
+    assert protocol.states
     teardown(protocol)
 
 
@@ -699,8 +741,29 @@ async def test_http3_request_over_capacity_gets_503() -> None:
 async def test_http3_timeout_handler_reschedules() -> None:
     harness, protocol, _ = await connected(echo_app())
     state = only_state(protocol)
-    state._on_timeout()  # fire the loss/idle timer manually
+    protocol._on_timeout()
     assert not state.conn.is_closed()
+    teardown(protocol)
+
+
+async def test_http3_timeout_discards_a_closed_connection() -> None:
+    harness, protocol, _ = await connected(echo_app())
+    only_state(protocol).conn.close()
+    protocol._on_timeout()
+    assert not protocol.states
+    teardown(protocol)
+
+
+async def test_http3_bounds_remembered_peer_addresses() -> None:
+    harness, protocol, _ = await connected(echo_app())
+    state = only_state(protocol)
+    for index in range(9):
+        addr: DatagramAddress = ("127.0.0.1", 60000 + index)
+        key = f"peer-{index}".encode()
+        protocol.addr_by_key[key] = addr
+        state.receive(addr, key)
+    assert len(state.address_keys) == 8
+    assert len(protocol.addr_by_key) == 8
     teardown(protocol)
 
 
@@ -709,7 +772,7 @@ async def test_http3_client_close_tears_down_connection() -> None:
     harness.client.close(error_code=0)
     for datagram in harness.client.data_to_send():
         protocol.datagram_received(datagram, CLIENT_ADDR)
-    assert not protocol.by_cid
+    assert not protocol.states
     teardown(protocol)
 
 
@@ -717,10 +780,10 @@ async def test_http3_close_cancels_pending_timer() -> None:
     harness, protocol, _ = await connected(echo_app())
     state = only_state(protocol)
     # In-memory exchanges rarely arm a loss timer, so force one to prove close() cancels it.
-    state.timer = asyncio.get_event_loop().call_later(30, lambda: None)
+    protocol.timer = asyncio.get_event_loop().call_later(30, lambda: None)
     state.close()
-    assert state.timer is None
-    assert not protocol.by_cid
+    assert protocol.timer is None
+    assert not protocol.states
 
 
 async def test_http3_stray_body_after_response_is_ignored() -> None:
@@ -742,7 +805,7 @@ async def test_http3_stray_body_after_response_is_ignored() -> None:
         protocol.datagram_received(datagram, CLIENT_ADDR)
     for _ in range(5):
         await asyncio.sleep(0)
-    assert protocol.by_cid
+    assert protocol.states
     teardown(protocol)
 
 
@@ -763,7 +826,7 @@ async def test_http3_connection_lost_disconnects_in_flight_request() -> None:
     state = only_state(protocol)
     assert state.cycles  # a request is in flight
     protocol.connection_lost(None)
-    assert not protocol.by_cid
+    assert not protocol.states
 
 
 def test_http3_config_sets_protocol_class() -> None:
@@ -797,6 +860,59 @@ async def test_http3_server_binds_udp_to_resolved_tcp_port() -> None:
         assert udp_addresses == tcp_addresses
 
 
+async def test_http3_server_preserves_scoped_ipv6_bind_address(monkeypatch: pytest.MonkeyPatch) -> None:
+    local_addr: DatagramAddress = ("fe80::1", 8000, 0, 3)
+    bound: list[DatagramAddress] = []
+
+    class ScopedSocket:
+        def bind(self, address: DatagramAddress) -> None:
+            bound.append(address)
+
+        def close(self) -> None:
+            pass
+
+    scoped_socket = ScopedSocket()
+
+    class ScopedIPv6Loop:
+        async def create_datagram_endpoint(self, protocol_factory, *, sock):
+            assert sock is scoped_socket
+            return MockDatagramTransport(local_addr), protocol_factory()
+
+    monkeypatch.setattr("uvicorn.server.socket.socket", lambda family, kind: scoped_socket)
+    config = Config(app=echo_app(), http3=True, log_level="warning")
+    config.load()
+    server = Server(config)
+    server.lifespan = LifespanOff(config)
+    await server._serve_http3(ScopedIPv6Loop(), local_addr)  # type: ignore[arg-type]
+    assert bound == [local_addr]
+    scoped_socket.close()
+    for transport in server.h3_transports:
+        transport.close()
+
+
+async def test_http3_closes_udp_socket_after_bind_failure(monkeypatch: pytest.MonkeyPatch) -> None:
+    class FailingSocket:
+        def __init__(self) -> None:
+            self.closed = False
+
+        def bind(self, address: DatagramAddress) -> None:
+            raise OSError("cannot bind")
+
+        def close(self) -> None:
+            self.closed = True
+
+    failing_socket = FailingSocket()
+    monkeypatch.setattr("uvicorn.server.socket.socket", lambda family, kind: failing_socket)
+    config = Config(app=echo_app(), http3=True, log_level="warning")
+    config.load()
+    server = Server(config)
+    server.lifespan = LifespanOff(config)
+    with pytest.raises(SystemExit) as exc_info:
+        await server._serve_http3(asyncio.get_running_loop(), SERVER_ADDR)
+    assert exc_info.value.code == 3
+    assert failing_socket.closed
+
+
 async def test_http3_skips_prebound_sockets(caplog: pytest.LogCaptureFixture) -> None:
     from tests.utils import run_server
 
@@ -819,12 +935,13 @@ def test_http3_credentials_are_derived_from_pem(tmp_path) -> None:
     cert_path, key_path = _p256_pem(tmp_path)
     config = Config(app=echo_app(), http3=True, ssl_certfile=cert_path, ssl_keyfile=key_path)
     config.load()
-    assert isinstance(config.h3_credentials, zttp.TlsCredentials)
-    assert len(config.h3_credentials.private_key) == 32
-    assert len(config.h3_credentials.certificate) > 32
+    assert config.h3_credentials is not None
+    assert len(config.h3_credentials["private_key_scalar"]) == 32
+    assert len(config.h3_credentials["certificates"]) == 1
+    assert len(config.h3_credentials["certificates"][0]) > 32
 
 
-def test_http3_warns_when_certificate_chain_is_ignored(tmp_path, caplog: pytest.LogCaptureFixture) -> None:
+def test_http3_loads_certificate_chain(tmp_path) -> None:
     cert_path, key_path = _p256_pem(tmp_path)
     with open(cert_path, "rb") as cert_file:
         certificate = cert_file.read()
@@ -832,7 +949,8 @@ def test_http3_warns_when_certificate_chain_is_ignored(tmp_path, caplog: pytest.
         cert_file.write(certificate)
     config = Config(app=echo_app(), http3=True, ssl_certfile=cert_path, ssl_keyfile=key_path)
     config.load()
-    assert "sends only the leaf TLS certificate" in caplog.text
+    assert config.h3_credentials is not None
+    assert len(config.h3_credentials["certificates"]) == 2
 
 
 def test_http3_rejects_ssl_context_without_pem_credentials() -> None:
