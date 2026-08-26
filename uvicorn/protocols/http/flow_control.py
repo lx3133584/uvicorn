@@ -1,10 +1,20 @@
 import asyncio
+from collections.abc import Iterable
 
 from uvicorn._types import ASGIReceiveCallable, ASGISendCallable, Scope
 
 CLOSE_HEADER = (b"connection", b"close")
 
 HIGH_WATER_LIMIT = 65536
+
+
+def is_connection_close(headers: Iterable[tuple[bytes, bytes]]) -> bool:
+    for name, value in headers:
+        if name.lower() == b"connection":
+            tokens = [token.strip().lower() for token in value.split(b",")]
+            if b"close" in tokens:
+                return True
+    return False
 
 
 class FlowControl:

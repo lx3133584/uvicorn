@@ -1082,6 +1082,30 @@ async def test_return_close_header(http_protocol_cls: type[HTTPProtocol]):
     assert b"connection: close" in protocol.transport.buffer.lower()
 
 
+@pytest.mark.parametrize(
+    "connection_header",
+    [
+        b"Connection: close",
+        b"Connection: Close",
+        b"Connection: keep-alive, close",
+        b"Connection: close, keep-alive",
+        b"Connection:   CLOSE  ",
+    ],
+)
+async def test_close_connection_with_different_connection_headers(
+    http_protocol_cls: type[HTTPProtocol], connection_header: bytes
+):
+    app = Response("Hello, world", media_type="text/plain")
+    request = b"\r\n".join([b"GET / HTTP/1.1", b"Host: example.org", connection_header, b"", b""])
+
+    protocol = get_connected_protocol(app, http_protocol_cls)
+    protocol.data_received(request)
+    await protocol.loop.run_one()
+    assert b"HTTP/1.1 200 OK" in protocol.transport.buffer
+    assert b"connection: close" in protocol.transport.buffer.lower()
+    assert protocol.transport.is_closing()
+
+
 async def test_close_connection_with_multiple_requests(http_protocol_cls: type[HTTPProtocol]):
     app = Response("Hello, world", media_type="text/plain")
 
